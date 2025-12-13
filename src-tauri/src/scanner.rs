@@ -79,8 +79,30 @@ pub fn scan_directory(path: &str) -> Result<FileNode, String> {
         total_size += dir.size;
         file_count += dir.file_count;
     }
+
+    // Convert files in root to FileNodes
+    let mut file_nodes: Vec<FileNode> = files.iter().map(|(entry, meta)| {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path_str = entry.path().to_string_lossy().to_string();
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH)
+            .duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+
+        FileNode {
+            name,
+            path: path_str,
+            size: meta.len(),
+            is_dir: false,
+            children: None,
+            last_modified: modified,
+            file_count: 1,
+        }
+    }).collect();
     
+    // Combine dirs and files
     let mut children_nodes = dir_results;
+    children_nodes.append(&mut file_nodes);
+    
+    // Sort by size descending
     children_nodes.sort_by(|a, b| b.size.cmp(&a.size));
     
     Ok(FileNode {
