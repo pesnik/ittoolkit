@@ -19,6 +19,11 @@ import {
     ProgressBar,
     Tooltip,
     SelectionItemId,
+    Menu,
+    MenuTrigger,
+    MenuList,
+    MenuItem,
+    MenuPopover,
 } from '@fluentui/react-components';
 import {
     FolderRegular,
@@ -27,6 +32,9 @@ import {
     ArrowLeftRegular,
     ArrowRightRegular,
     ArrowClockwiseRegular,
+    OpenRegular,
+    DeleteRegular,
+    FolderOpenRegular,
 } from '@fluentui/react-icons';
 import { invoke } from '@tauri-apps/api/core';
 import { FileNode } from '@/types';
@@ -86,6 +94,11 @@ export const FileExplorer = () => {
 
     const [inputPath, setInputPath] = React.useState(state.path);
     const [selectedItems, setSelectedItems] = React.useState<Set<SelectionItemId>>(new Set());
+
+    // Context Menu State
+    const [contextMenuOpen, setContextMenuOpen] = React.useState(false);
+    const [contextMenuLocation, setContextMenuLocation] = React.useState({ x: 0, y: 0 });
+    const [contextMenuItem, setContextMenuItem] = React.useState<FileNode | null>(null);
 
     // Compute the actually selected item object (only one supported for now)
     const selectedItem = React.useMemo(() => {
@@ -209,6 +222,25 @@ export const FileExplorer = () => {
         }
     };
 
+    const handleDelete = async (item: FileNode) => {
+        if (!confirm(`Are you sure you want to delete ${item.name}?`)) return;
+        try {
+            await invoke('delete_item', { path: item.path });
+            // Refresh current view
+            fetchData(state.path, true);
+        } catch (e) {
+            alert(`Failed to delete: ${e}`);
+        }
+    };
+
+    const handleOpenInExplorer = async (item: FileNode) => {
+        try {
+            await invoke('open_in_explorer', { path: item.path });
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     const items = state.data?.children || [];
 
     return (
@@ -270,6 +302,13 @@ export const FileExplorer = () => {
                         {({ item, rowId }) => (
                             <DataGridRow<FileNode>
                                 key={rowId}
+                                onContextMenu={(e: React.MouseEvent) => {
+                                    e.preventDefault();
+                                    setContextMenuItem(item);
+                                    setContextMenuLocation({ x: e.clientX, y: e.clientY });
+                                    setContextMenuOpen(true);
+                                    setSelectedItems(new Set([item.path])); // Auto select on right click
+                                }}
                                 onDoubleClick={() => {
                                     if (item.is_dir) handleNavigate(item.path);
                                 }}
@@ -286,6 +325,27 @@ export const FileExplorer = () => {
                         )}
                     </DataGridBody>
                 </DataGrid>
+
+                {/* Context Menu */}
+                <Menu
+                    open={contextMenuOpen}
+                    onOpenChange={(e, data) => setContextMenuOpen(data.open)}
+                    positioning={{ target: { x: contextMenuLocation.x, y: contextMenuLocation.y } }}
+                >
+                    <MenuPopover>
+                        <MenuList>
+                            <MenuItem icon={<OpenRegular />} onClick={() => contextMenuItem && handleNavigate(contextMenuItem.path)} disabled={!contextMenuItem?.is_dir}>
+                                Open
+                            </MenuItem>
+                            <MenuItem icon={<FolderOpenRegular />} onClick={() => contextMenuItem && handleOpenInExplorer(contextMenuItem)}>
+                                Reveal in Explorer/Finder
+                            </MenuItem>
+                            <MenuItem icon={<DeleteRegular />} onClick={() => contextMenuItem && handleDelete(contextMenuItem)}>
+                                Delete
+                            </MenuItem>
+                        </MenuList>
+                    </MenuPopover>
+                </Menu>
             </div>
 
             {/* Status Bar */}

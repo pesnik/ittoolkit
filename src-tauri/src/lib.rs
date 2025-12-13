@@ -18,7 +18,8 @@ pub fn run() {
         commands::scan_dir,
         commands::refresh_scan,
         commands::clear_cache,
-        commands::open_in_explorer
+        commands::open_in_explorer,
+        commands::delete_item
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

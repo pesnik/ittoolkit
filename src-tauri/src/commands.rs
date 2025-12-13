@@ -142,3 +142,23 @@ pub fn open_in_explorer(path: String) {
             .unwrap();
     }
 }
+
+#[command]
+pub fn delete_item(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("Path does not exist".to_string());
+    }
+
+    if p.is_dir() {
+        std::fs::remove_dir_all(p).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::remove_file(p).map_err(|e| e.to_string())?;
+    }
+    
+    // Invalidate cache for parent or just clear all for safety?
+    // Let's clear for now to be safe as size calc up the tree changes.
+    clear_cache();
+    
+    Ok(())
+}
