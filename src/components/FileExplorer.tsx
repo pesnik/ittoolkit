@@ -27,7 +27,6 @@ import {
     ArrowLeftRegular,
     ArrowRightRegular,
     ArrowClockwiseRegular,
-    OpenRegular,
 } from '@fluentui/react-icons';
 import { invoke } from '@tauri-apps/api/core';
 import { FileNode } from '@/types';
@@ -219,22 +218,18 @@ export const FileExplorer = () => {
                 <Tooltip content="Back" relationship="label">
                     <Button icon={<ArrowLeftRegular />} disabled={state.historyIndex <= 0} onClick={handleBack} />
                 </Tooltip>
-                <Tooltip content="Forward" relationship="label">
-                    <Button icon={<ArrowRightRegular />} disabled={state.historyIndex >= state.history.length - 1} onClick={handleForward} />
+                <Tooltip content="Open Selected Folder" relationship="label">
+                    <Button
+                        icon={<ArrowRightRegular />}
+                        disabled={!selectedItem || !selectedItem.is_dir}
+                        onClick={() => selectedItem && handleNavigate(selectedItem.path)}
+                    />
                 </Tooltip>
                 <Tooltip content="Up" relationship="label">
                     <Button icon={<ArrowUpRegular />} onClick={handleUp} />
                 </Tooltip>
                 <Tooltip content="Refresh" relationship="label">
                     <Button icon={<ArrowClockwiseRegular />} onClick={() => fetchData(state.path, true)} />
-                </Tooltip>
-
-                <Tooltip content="Open Selected Folder" relationship="label">
-                    <Button
-                        icon={<OpenRegular />}
-                        disabled={!selectedItem || !selectedItem.is_dir}
-                        onClick={() => selectedItem && handleNavigate(selectedItem.path)}
-                    />
                 </Tooltip>
 
                 <div className={styles.pathBar}>
