@@ -2,9 +2,9 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "helium",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.helium.v3.core",
   "build": {
-    "frontendDist": "out",
+    "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
