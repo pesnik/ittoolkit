@@ -152,7 +152,7 @@ export const FileExplorer = () => {
             columnId: 'count',
             compare: (a, b) => a.file_count - b.file_count,
             renderHeaderCell: () => 'Files',
-            renderCell: (item) => item.is_dir ? item.file_count.toLocaleString() : '-',
+            renderCell: (item) => (item.is_dir && state.path !== '') ? item.file_count.toLocaleString() : '-',
         }),
         createTableColumn({
             columnId: 'modified',

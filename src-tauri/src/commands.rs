@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use lazy_static::lazy_static;
 use std::path::Path;
+use sysinfo::Disks;
 
 struct CacheEntry {
     node: FileNode,
@@ -202,73 +203,47 @@ pub fn delete_item(path: String) -> Result<(), String> {
 #[command]
 pub fn get_drives() -> Vec<FileNode> {
     let mut drives = Vec::new();
+    let disks = Disks::new_with_refreshed_list();
 
-    #[cfg(target_os = "windows")]
-    {
-        // Simple iteration from A to Z to find mounts
-        for i in b'A'..=b'Z' {
-            let drive_letter = i as char;
-            let path = format!("{}:\\", drive_letter);
-            if Path::new(&path).exists() {
-                drives.push(FileNode {
-                    name: format!("Local Disk ({}:)", drive_letter),
-                    path,
-                    size: 0, // Need meaningful size? Scan would be slow. 0 for now.
-                    is_dir: true,
-                    children: None,
-                    last_modified: 0,
-                    file_count: 0,
-                });
-            }
-        }
-    }
+    for disk in &disks {
+        let name = disk.name().to_string_lossy().to_string();
+        let mount_point = disk.mount_point().to_string_lossy().to_string();
+        let total = disk.total_space();
+        let available = disk.available_space();
+        let used = total.saturating_sub(available);
 
-    #[cfg(target_os = "macos")]
-    {
-        // Root
+        let height_name = if name.is_empty() {
+             if mount_point == "/" { 
+                 "System Root".to_string() 
+             } else { 
+                 mount_point.clone() 
+             }
+        } else {
+             name.clone()
+        };
+        
+        // On Windows, if the name doesn't have the drive letter, we might ideally want it,
+        // but the user explicitly requested no parens/extra info.
+        // Assuming sysinfo provides "Local Disk (C:)" style defaults often, or user is fine with just Label.
+        let final_name = height_name;
+
+        // Try to get actual modification time of the mount point
+        let last_modified = std::fs::metadata(&mount_point)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|t| t.as_secs())
+            .unwrap_or(0);
+
         drives.push(FileNode {
-            name: "Macintosh HD".to_string(), // Typical name, hardcoded or just Root
-            path: "/".to_string(),
-            size: 0,
+            name: final_name,
+            path: mount_point,
+            size: used,
             is_dir: true,
             children: None,
-            last_modified: 0,
-            file_count: 0
+            last_modified,
+            file_count: 0,
         });
-
-        // External Volumes
-        if let Ok(entries) = std::fs::read_dir("/Volumes") {
-            for entry in entries.flatten() {
-                 let path = entry.path();
-                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                 // Skip some typical hidden ones?
-                 drives.push(FileNode {
-                    name,
-                    path: path.to_string_lossy().to_string(),
-                    size: 0,
-                    is_dir: true,
-                    children: None,
-                    last_modified: 0,
-                    file_count: 0
-                });
-            }
-        }
     }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Just Root for now
-        drives.push(FileNode {
-            name: "Root /".to_string(),
-            path: "/".to_string(),
-            size: 0,
-            is_dir: true,
-            children: None,
-            last_modified: 0,
-            file_count: 0
-        });
-        // Could check /media or /mnt
-    }
-
     drives
 }
