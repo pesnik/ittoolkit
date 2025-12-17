@@ -78,6 +78,18 @@ export interface ModelParameters {
 }
 
 /**
+ * Tool execution data for display
+ */
+export interface ToolExecutionData {
+    toolName: string;
+    arguments: Record<string, unknown>;
+    result?: string;
+    error?: string;
+    executionTimeMs?: number;
+    status: 'executing' | 'success' | 'error';
+}
+
+/**
  * Chat message
  */
 export interface ChatMessage {
@@ -95,6 +107,8 @@ export interface ChatMessage {
     isStreaming?: boolean;
     /** Error message if inference failed */
     error?: string;
+    /** Tool executions performed (for agent mode) */
+    toolExecutions?: ToolExecutionData[];
 }
 
 /**

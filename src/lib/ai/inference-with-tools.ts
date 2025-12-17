@@ -4,7 +4,7 @@
  * Wrapper around AI inference that handles tool calling loop.
  */
 
-import { InferenceRequest, InferenceResponse, ChatMessage, MessageRole } from '@/types/ai-types';
+import { InferenceRequest, InferenceResponse, ChatMessage, MessageRole, ToolExecutionData } from '@/types/ai-types';
 import { runInference } from './ai-service';
 import { mcpService } from './mcp-service';
 import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags } from './tool-calling';
@@ -43,6 +43,7 @@ export async function runInferenceWithTools(
     let currentRequest = { ...request };
     let iterations = 0;
     let finalResponse: InferenceResponse | null = null;
+    const allToolExecutions: ToolExecutionData[] = []; // Track all tool executions
 
     while (iterations < MAX_TOOL_ITERATIONS) {
         iterations++;
@@ -89,6 +90,13 @@ export async function runInferenceWithTools(
                 console.log(`[InferenceWithTools] 🔧 Executing tool: ${toolCall.name}`);
                 console.log(`[InferenceWithTools]    Arguments:`, JSON.stringify(toolCall.arguments, null, 2));
 
+                // Create tool execution data (executing status)
+                const toolExecution: ToolExecutionData = {
+                    toolName: toolCall.name,
+                    arguments: toolCall.arguments,
+                    status: 'executing',
+                };
+
                 // Notify about tool execution
                 if (onToolExecution) {
                     onToolExecution({
@@ -103,6 +111,17 @@ export async function runInferenceWithTools(
 
                 console.log(`[InferenceWithTools] ✅ Tool ${toolCall.name} executed in ${executionTimeMs}ms`);
                 console.log(`[InferenceWithTools]    Result preview: ${result.content.substring(0, 200)}${result.content.length > 200 ? '...' : ''}`);
+
+                // Update tool execution data (success status)
+                toolExecution.status = result.isError ? 'error' : 'success';
+                toolExecution.result = result.content;
+                toolExecution.executionTimeMs = executionTimeMs;
+                if (result.isError) {
+                    toolExecution.error = result.content;
+                }
+
+                // Add to all executions
+                allToolExecutions.push(toolExecution);
 
                 // Notify about result
                 if (onToolExecution) {
@@ -126,6 +145,15 @@ export async function runInferenceWithTools(
                 toolResults.push(toolResultMessage);
             } catch (error) {
                 console.error(`[InferenceWithTools] Tool execution error:`, error);
+
+                // Create tool execution data (error status)
+                const toolExecution: ToolExecutionData = {
+                    toolName: toolCall.name,
+                    arguments: toolCall.arguments,
+                    status: 'error',
+                    error: error instanceof Error ? error.message : String(error),
+                };
+                allToolExecutions.push(toolExecution);
 
                 const errorMessage: ChatMessage = {
                     id: `tool-error-${Date.now()}-${toolCall.id}`,
@@ -172,6 +200,11 @@ export async function runInferenceWithTools(
 
     if (!finalResponse) {
         throw new Error('Maximum tool calling iterations reached');
+    }
+
+    // Attach all tool executions to the final response message
+    if (allToolExecutions.length > 0) {
+        finalResponse.message.toolExecutions = allToolExecutions;
     }
 
     return finalResponse;

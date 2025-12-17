@@ -25,6 +25,7 @@ import {
 import { ChatMessage, MessageRole } from '@/types/ai-types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ToolCallDisplay } from './ToolCallDisplay';
 
 const useStyles = makeStyles({
     container: {
@@ -247,16 +248,29 @@ export function AIChat({
                                     )}
                                 </div>
                                 <div className={styles.messageContent}>
-                                    <div
-                                        className={`${styles.messageBubble} ${message.role === MessageRole.User
-                                            ? styles.userBubble
-                                            : styles.assistantBubble
-                                            }`}
-                                    >
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {message.content}
-                                        </ReactMarkdown>
-                                    </div>
+                                    {/* Tool Executions (if any) */}
+                                    {message.toolExecutions && message.toolExecutions.length > 0 && (
+                                        <div style={{ marginBottom: '8px' }}>
+                                            {message.toolExecutions.map((execution, idx) => (
+                                                <ToolCallDisplay key={idx} execution={execution} />
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Message Content */}
+                                    {message.content && (
+                                        <div
+                                            className={`${styles.messageBubble} ${message.role === MessageRole.User
+                                                ? styles.userBubble
+                                                : styles.assistantBubble
+                                                }`}
+                                        >
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {message.content}
+                                            </ReactMarkdown>
+                                        </div>
+                                    )}
+
                                     <div className={styles.timestamp}>
                                         {formatTimestamp(message.timestamp)}
                                     </div>
