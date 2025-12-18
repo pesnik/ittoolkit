@@ -27,6 +27,7 @@ import {
     useId,
     ToastTitle,
     ToastBody,
+    ToastTrigger,
 } from '@fluentui/react-components';
 import {
     Dismiss24Regular,
@@ -273,15 +274,16 @@ export function AISettingsPanel({
 
     const handleTestInference = async () => {
         if (!modelConfig || !activeProvider) {
-            const toastId = dispatchToast(
+            dispatchToast(
                 <Toast>
                     <ToastTitle action={
-                        <Button
-                            appearance="transparent"
-                            icon={<DismissRegular />}
-                            size="small"
-                            onClick={() => dismissToast(toastId)}
-                        />
+                        <ToastTrigger>
+                            <Button
+                                appearance="transparent"
+                                icon={<DismissRegular />}
+                                size="small"
+                            />
+                        </ToastTrigger>
                     }>
                         Test Failed
                     </ToastTitle>
@@ -322,15 +324,16 @@ export function AISettingsPanel({
             const finalResponse = response.message.content || streamedResponse;
             // Don't set inline result for success, only show toast
 
-            const successToastId = dispatchToast(
+            dispatchToast(
                 <Toast>
                     <ToastTitle action={
-                        <Button
-                            appearance="transparent"
-                            icon={<DismissRegular />}
-                            size="small"
-                            onClick={() => dismissToast(successToastId)}
-                        />
+                        <ToastTrigger>
+                            <Button
+                                appearance="transparent"
+                                icon={<DismissRegular />}
+                                size="small"
+                            />
+                        </ToastTrigger>
                     }>
                         Test Successful
                     </ToastTitle>
@@ -356,15 +359,16 @@ export function AISettingsPanel({
                 }
             }
 
-            const errorToastId = dispatchToast(
+            dispatchToast(
                 <Toast>
                     <ToastTitle action={
-                        <Button
-                            appearance="transparent"
-                            icon={<DismissRegular />}
-                            size="small"
-                            onClick={() => dismissToast(errorToastId)}
-                        />
+                        <ToastTrigger>
+                            <Button
+                                appearance="transparent"
+                                icon={<DismissRegular />}
+                                size="small"
+                            />
+                        </ToastTrigger>
                     }>
                         Test Failed
                     </ToastTitle>
