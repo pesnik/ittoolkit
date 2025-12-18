@@ -9,7 +9,8 @@
       "Bash(npx tsc:*)",
       "Bash(npx @modelcontextprotocol/server-filesystem:*)",
       "Bash(cargo build:*)",
-      "Bash(npm run tauri:*)"
+      "Bash(npm run tauri:*)",
+      "Bash(git remote set-url:*)"
     ],
     "deny": [],
     "ask": []

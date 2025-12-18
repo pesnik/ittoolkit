@@ -1,9 +1,13 @@
-# Helium v3 (Tauri Application)
+# Toolkit
 
-A modern storage analyzer tool built with:
+A modern team utilities application with a toolshed of features built with:
 - **Tauri** (Rust) for the backend
 - **Next.js** (React) for the frontend
 - **Fluent UI 2** for the design system
+
+## Features
+- Storage analyzer and junk file cleaner
+- Extensible toolshed architecture for adding team utilities
 
 ## Prerequisites
 - Node.js (v22 recommended)

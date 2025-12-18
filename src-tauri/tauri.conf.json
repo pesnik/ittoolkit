@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "helium",
-  "version": "0.2.0",
-  "identifier": "com.helium.v3.core",
+  "productName": "Toolkit",
+  "version": "1.0.0",
+  "identifier": "com.toolkit.app",
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Helium",
+        "title": "Toolkit",
         "width": 800,
         "height": 600,
         "resizable": true,
