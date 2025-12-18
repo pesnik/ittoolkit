@@ -49,10 +49,12 @@ import {
     SparkleRegular,
     BroomRegular,
     WarningRegular,
+    BoxToolboxRegular,
 } from '@fluentui/react-icons';
 import { DiskUsageChart } from './DiskUsageChart';
 import { BreadcrumbPath } from './BreadcrumbPath';
 import { CleanerPanel } from './CleanerPanel';
+import ToolshedPanel from './ToolshedPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FileNode } from '@/types';
@@ -294,7 +296,7 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
 
     const [selectedItems, setSelectedItems] = React.useState<Set<SelectionItemId>>(new Set());
     const [showChart, setShowChart] = React.useState(false);
-    const [viewMode, setViewMode] = React.useState<'explorer' | 'cleaner'>('explorer');
+    const [viewMode, setViewMode] = React.useState<'explorer' | 'cleaner' | 'toolshed'>('explorer');
 
     // Scan Progress State
     const [scanProgress, setScanProgress] = useState<ScanProgressPayload | null>(null);
@@ -650,15 +652,15 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                         icon={<DataPieRegular />}
                         appearance={showChart ? "primary" : "secondary"}
                         onClick={() => setShowChart(!showChart)}
-                        disabled={viewMode === 'cleaner'}
+                        disabled={viewMode !== 'explorer'}
                     />
                 </Tooltip>
 
-                <Tooltip content="System Cleaner" relationship="label">
+                <Tooltip content="Toolshed" relationship="label">
                     <Button
-                        icon={<BroomRegular />}
-                        appearance={viewMode === 'cleaner' ? "primary" : "secondary"}
-                        onClick={() => setViewMode(viewMode === 'cleaner' ? 'explorer' : 'cleaner')}
+                        icon={<BoxToolboxRegular />}
+                        appearance={viewMode === 'toolshed' ? "primary" : "secondary"}
+                        onClick={() => setViewMode(viewMode === 'toolshed' ? 'explorer' : 'toolshed')}
                     />
                 </Tooltip>
 
@@ -691,9 +693,13 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                 />
             )}
 
-            {/* Main Content Area (Grid + Chart + Cleaner) */}
+            {/* Main Content Area (Grid + Chart + Toolshed) */}
             <div style={{ display: 'flex', flexGrow: 1, overflow: 'hidden', gap: '10px' }}>
-                {viewMode === 'cleaner' ? (
+                {viewMode === 'toolshed' ? (
+                    <div style={{ flexGrow: 1, height: '100%', overflow: 'hidden' }}>
+                        <ToolshedPanel />
+                    </div>
+                ) : viewMode === 'cleaner' ? (
                     <div style={{ flexGrow: 1, height: '100%', overflow: 'hidden' }}>
                         <CleanerPanel />
                     </div>
