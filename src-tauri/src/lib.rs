@@ -5,6 +5,7 @@ mod ai_commands;
 mod cleaner;
 mod mcp;
 mod mcp_commands_native; // Native Rust MCP implementation (replaces subprocess)
+mod system_tools;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,7 +43,20 @@ pub fn run() {
         mcp_commands_native::get_mcp_tools,
         mcp_commands_native::execute_mcp_tool,
         mcp_commands_native::shutdown_mcp,
-        mcp_commands_native::is_mcp_initialized
+        mcp_commands_native::is_mcp_initialized,
+        // System Tools
+        system_tools::get_disk_info,
+        system_tools::get_network_interfaces,
+        system_tools::ping_host,
+        system_tools::dns_lookup,
+        system_tools::scan_ports,
+        system_tools::get_system_info,
+        system_tools::get_services,
+        system_tools::service_action,
+        system_tools::get_process_list,
+        system_tools::kill_process,
+        system_tools::get_security_logs,
+        system_tools::get_open_ports
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -12,8 +12,16 @@ import {
 import {
   BroomRegular,
   ArrowLeftRegular,
+  HardDriveRegular,
+  Wifi1Regular,
+  SettingsRegular,
+  ShieldRegular,
 } from '@fluentui/react-icons';
 import { CleanerPanel } from './CleanerPanel';
+import { DiskManager } from './tools/DiskManager';
+import { NetworkToolkit } from './tools/NetworkToolkit';
+import { SystemAdmin } from './tools/SystemAdmin';
+import { SecurityMonitor } from './tools/SecurityMonitor';
 
 const useStyles = makeStyles({
   container: {
@@ -83,7 +91,34 @@ const tools: Tool[] = [
     icon: <BroomRegular />,
     component: CleanerPanel,
   },
-  // Add more tools here as you develop them
+  {
+    id: 'disk-manager',
+    name: 'Disk Manager',
+    description: 'View disk information, partitions, and SMART health data',
+    icon: <HardDriveRegular />,
+    component: DiskManager,
+  },
+  {
+    id: 'network-toolkit',
+    name: 'Network Toolkit',
+    description: 'Ping, DNS lookup, port scanning, and network diagnostics',
+    icon: <Wifi1Regular />,
+    component: NetworkToolkit,
+  },
+  {
+    id: 'system-admin',
+    name: 'System Administration',
+    description: 'Manage services, view system info, and control processes',
+    icon: <SettingsRegular />,
+    component: SystemAdmin,
+  },
+  {
+    id: 'security-monitor',
+    name: 'Security Monitor',
+    description: 'Monitor processes, security logs, open ports, and firewall',
+    icon: <ShieldRegular />,
+    component: SecurityMonitor,
+  },
 ];
 
 export default function ToolshedPanel() {
