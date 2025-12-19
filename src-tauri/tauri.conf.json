@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Toolkit",
+  "productName": "IT Toolkit",
   "version": "1.0.0",
-  "identifier": "com.toolkit.app",
+  "identifier": "com.ittoolkit.app",
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Toolkit",
+        "title": "IT Toolkit",
         "width": 800,
         "height": 600,
         "resizable": true,

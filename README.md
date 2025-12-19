@@ -1,6 +1,6 @@
-# Toolkit
+# IT Toolkit
 
-A modern team utilities application with a toolshed of features built with:
+A modern IT support team utilities application with a toolshed of features built with:
 - **Tauri** (Rust) for the backend
 - **Next.js** (React) for the frontend
 - **Fluent UI 2** for the design system
