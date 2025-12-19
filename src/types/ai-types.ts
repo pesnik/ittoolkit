@@ -1,5 +1,5 @@
 /**
- * AI/LLM Type Definitions for Helium
+ * AI/LLM Type Definitions for RoRo
  * 
  * This file contains all TypeScript types and interfaces for the AI/LLM integration.
  */

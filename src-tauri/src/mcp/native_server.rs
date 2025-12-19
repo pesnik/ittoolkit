@@ -46,7 +46,7 @@ impl NativeMCPServer {
         *init_guard = true;
 
         Ok(ServerInfo {
-            name: "helium-mcp-fs".to_string(),
+            name: "RoRo-mcp-fs".to_string(),
             version: "0.2.0".to_string(),
             protocol_version: "2024-11-05".to_string(),
         })

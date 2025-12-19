@@ -1,6 +1,6 @@
-# Makefile for Helium v3
+# Makefile for IT Toolkit v3
 
-APP_NAME = helium
+APP_NAME = ittoolkit
 TAURI_DIR = src-tauri
 TARGET_DIR = $(TAURI_DIR)/target/release/bundle
 DIST_DIR = dist

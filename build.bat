@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set APP_NAME=helium
+set APP_NAME=ittoolkit
 set DIST_DIR=dist
 
 echo Building %APP_NAME%...
@@ -19,9 +19,9 @@ if exist "src-tauri\target\release\bundle\nsis\*.exe" (
 
 REM Create a portable zip (manual step since Tauri builds installers by default)
 REM We zip the executable and resources directly
-if exist "src-tauri\target\release\helium.exe" (
+if exist "src-tauri\target\release\ittoolkit.exe" (
     echo Creating portable zip...
-    powershell -command "Compress-Archive -Path 'src-tauri\target\release\helium.exe' -DestinationPath '%DIST_DIR%\%APP_NAME%-windows-portable.zip' -Force"
+    powershell -command "Compress-Archive -Path 'src-tauri\target\release\ittoolkit.exe' -DestinationPath '%DIST_DIR%\%APP_NAME%-windows-portable.zip' -Force"
 )
 
 echo.

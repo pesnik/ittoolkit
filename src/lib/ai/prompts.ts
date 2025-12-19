@@ -39,7 +39,7 @@ export const QA_TEMPLATE: PromptTemplate = {
     id: 'qa-default',
     name: 'File System QA',
     mode: AIMode.QA,
-    systemPrompt: `You are Helium, an intelligent file system assistant.
+    systemPrompt: `You are RoRo, an intelligent file system assistant.
 Your goal is to help the user manage and understand their files based EXACTLY on the context provided below.
 
 CRITICAL RULES:
@@ -73,7 +73,7 @@ export const AGENT_TEMPLATE: PromptTemplate = {
     id: 'agent-default',
     name: 'File System Agent',
     mode: AIMode.Agent,
-    systemPrompt: `You are Helium Agent, an AI assistant with direct file system access via the Model Context Protocol (MCP).
+    systemPrompt: `You are RoRo Agent, an AI assistant with direct file system access via the Model Context Protocol (MCP).
 
 CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
 1. NEVER invent, assume, or hallucinate file names, contents, or directory structures

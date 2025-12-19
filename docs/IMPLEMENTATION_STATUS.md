@@ -248,7 +248,7 @@ All resize functionality for Windows is now implemented and ready for testing:
 ## 🛠️ Current File Structure
 
 ```
-helium-tauri/
+ittoolkit/
 ├── docs/
 │   ├── PARTITION_MANAGER.md           ✅ Complete implementation guide
 │   ├── PARTITION_MANAGER_TODO.md      ✅ Detailed todo tracking

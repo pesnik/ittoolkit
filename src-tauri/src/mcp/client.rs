@@ -63,7 +63,7 @@ impl MCPClient {
                 }),
             },
             client_info: ClientInfo {
-                name: "helium-ai".to_string(),
+                name: "RoRo-ai".to_string(),
                 version: "0.2.0".to_string(),
             },
         };
