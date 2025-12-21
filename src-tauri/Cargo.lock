@@ -126,45 +126,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
-name = "app"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "bytes",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "chrono",
- "dirs 5.0.1",
- "fs_extra",
- "futures-util",
- "gptman",
- "hf-hub",
- "jwalk",
- "lazy_static",
- "log",
- "mbrman",
- "rayon",
- "reqwest 0.11.27",
- "rmcp",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "thiserror 2.0.17",
- "tokenizers",
- "tokio",
- "tokio-util",
- "uuid",
- "walkdir",
- "windows 0.58.0",
- "wmi",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2604,6 +2565,45 @@ name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+
+[[package]]
+name = "ittoolkit"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "chrono",
+ "dirs 5.0.1",
+ "fs_extra",
+ "futures-util",
+ "gptman",
+ "hf-hub",
+ "jwalk",
+ "lazy_static",
+ "log",
+ "mbrman",
+ "rayon",
+ "reqwest 0.11.27",
+ "rmcp",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "thiserror 2.0.17",
+ "tokenizers",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "walkdir",
+ "windows 0.58.0",
+ "wmi",
+]
 
 [[package]]
 name = "javascriptcore-rs"

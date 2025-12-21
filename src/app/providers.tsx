@@ -6,6 +6,8 @@ import { FluentProvider, webDarkTheme } from '@fluentui/react-components';
 // Custom theme or override can be done here. 
 // For now, standard webDarkTheme is professional enough.
 
+import { ThemeProvider } from '../lib/ThemeContext';
+
 export function Providers({ children }: { children: React.ReactNode }) {
     const [mounted, setMounted] = React.useState(false);
 
@@ -20,8 +22,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     }
 
     return (
-        <FluentProvider theme={webDarkTheme} style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <ThemeProvider>
             {children}
-        </FluentProvider>
+        </ThemeProvider>
     );
 }

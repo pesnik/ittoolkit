@@ -53,7 +53,7 @@ const useStyles = makeStyles({
     },
     header: {
         ...shorthands.padding('12px', '16px'),
-        backgroundColor: '#1e1e1e',
+        backgroundColor: tokens.colorNeutralBackground2,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -388,9 +388,9 @@ export const AIPanel = ({
             // Remove streaming/thinking messages AND error messages from failed requests
             let cleaned = prev.filter(msg =>
                 !(msg.content === '💭 Thinking...' ||
-                  msg.isStreaming ||
-                  msg.content.startsWith('Sorry, I encountered an error:') ||
-                  msg.error)
+                    msg.isStreaming ||
+                    msg.content.startsWith('Sorry, I encountered an error:') ||
+                    msg.error)
             );
 
             // If last message is a user message, remove it (it was from a cancelled request)
@@ -468,8 +468,8 @@ export const AIPanel = ({
                     ? 'defaultAIEndpoint_openaiCompatible'
                     : 'defaultAIEndpoint_ollama';
                 endpointToUse = localStorage.getItem(endpointKey) ||
-                               selectedModel.endpoint ||
-                               await getDefaultEndpoint(activeProvider);
+                    selectedModel.endpoint ||
+                    await getDefaultEndpoint(activeProvider);
 
                 // Load custom model name for OpenAI-compatible
                 if (activeProvider === ModelProvider.OpenAICompatible) {
@@ -505,94 +505,94 @@ export const AIPanel = ({
             // Use tool-enabled inference for Agent mode, standard inference for QA mode
             const response = mode === AIMode.Agent
                 ? await runInferenceWithTools({
-                      sessionId: sessionId,
-                      modelConfig: modelConfigWithEndpoint,
-                      messages: messagesToSend,
-                      fsContext,
-                      mode,
-                  }, {
-                      onChunk: isStreaming ? (chunk) => {
-                          // Remove download message once we start getting chunks
-                          if (downloadMsgId) {
-                              setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
-                              downloadMsgId = ''; // Clear it so we only remove once
-                          }
+                    sessionId: sessionId,
+                    modelConfig: modelConfigWithEndpoint,
+                    messages: messagesToSend,
+                    fsContext,
+                    mode,
+                }, {
+                    onChunk: isStreaming ? (chunk) => {
+                        // Remove download message once we start getting chunks
+                        if (downloadMsgId) {
+                            setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
+                            downloadMsgId = ''; // Clear it so we only remove once
+                        }
 
-                          // On first chunk, replace the "thinking" message
-                          if (streamedContent === '') {
-                              streamedContent = chunk;
-                              setMessages((prev) => prev.map(msg =>
-                                  msg.id === assistantMsgId
-                                      ? { ...msg, content: chunk, isStreaming: true }
-                                      : msg
-                              ));
-                              return;
-                          }
+                        // On first chunk, replace the "thinking" message
+                        if (streamedContent === '') {
+                            streamedContent = chunk;
+                            setMessages((prev) => prev.map(msg =>
+                                msg.id === assistantMsgId
+                                    ? { ...msg, content: chunk, isStreaming: true }
+                                    : msg
+                            ));
+                            return;
+                        }
 
-                          // Handle subsequent streaming chunks
-                          streamedContent += chunk;
-                          setMessages((prev) => prev.map(msg =>
-                              msg.id === assistantMsgId
-                                  ? { ...msg, content: streamedContent, isStreaming: true }
-                                  : msg
-                          ));
-                      } : undefined,
-                      onToolExecution: (event) => {
-                          if (event.result || event.error) {
-                              // Tool completed
-                              if (event.error) {
-                                  console.error(`[AIPanel] ❌ Tool ${event.toolName} failed:`, event.error);
-                              } else {
-                                  console.log(`[AIPanel] ✅ Tool ${event.toolName} completed in ${event.executionTimeMs}ms`);
-                                  console.log(`[AIPanel]    Result length:`, event.result?.length);
-                                  console.log(`[AIPanel]    Result preview:`, event.result?.substring(0, 100));
+                        // Handle subsequent streaming chunks
+                        streamedContent += chunk;
+                        setMessages((prev) => prev.map(msg =>
+                            msg.id === assistantMsgId
+                                ? { ...msg, content: streamedContent, isStreaming: true }
+                                : msg
+                        ));
+                    } : undefined,
+                    onToolExecution: (event) => {
+                        if (event.result || event.error) {
+                            // Tool completed
+                            if (event.error) {
+                                console.error(`[AIPanel] ❌ Tool ${event.toolName} failed:`, event.error);
+                            } else {
+                                console.log(`[AIPanel] ✅ Tool ${event.toolName} completed in ${event.executionTimeMs}ms`);
+                                console.log(`[AIPanel]    Result length:`, event.result?.length);
+                                console.log(`[AIPanel]    Result preview:`, event.result?.substring(0, 100));
 
-                                  // Log full result for debugging (useful when inspecting tool responses)
-                                  if (event.result && event.result.length < 1000) {
-                                      console.log(`[AIPanel]    Full result:`, event.result);
-                                  } else if (event.result) {
-                                      console.log(`[AIPanel]    Full result (first 1000 chars):`, event.result.substring(0, 1000) + '...');
-                                  }
-                              }
-                          } else {
-                              // Tool started
-                              console.log(`[AIPanel] 🔧 Starting tool: ${event.toolName}`);
-                              console.log(`[AIPanel]    Arguments:`, JSON.stringify(event.arguments, null, 2));
-                          }
-                      },
-                  })
+                                // Log full result for debugging (useful when inspecting tool responses)
+                                if (event.result && event.result.length < 1000) {
+                                    console.log(`[AIPanel]    Full result:`, event.result);
+                                } else if (event.result) {
+                                    console.log(`[AIPanel]    Full result (first 1000 chars):`, event.result.substring(0, 1000) + '...');
+                                }
+                            }
+                        } else {
+                            // Tool started
+                            console.log(`[AIPanel] 🔧 Starting tool: ${event.toolName}`);
+                            console.log(`[AIPanel]    Arguments:`, JSON.stringify(event.arguments, null, 2));
+                        }
+                    },
+                })
                 : await runInference({
-                      sessionId: sessionId,
-                      modelConfig: modelConfigWithEndpoint,
-                      messages: messagesToSend,
-                      fsContext,
-                      mode,
-                  }, isStreaming ? (chunk) => {
-                      // Remove download message once we start getting chunks
-                      if (downloadMsgId) {
-                          setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
-                          downloadMsgId = ''; // Clear it so we only remove once
-                      }
+                    sessionId: sessionId,
+                    modelConfig: modelConfigWithEndpoint,
+                    messages: messagesToSend,
+                    fsContext,
+                    mode,
+                }, isStreaming ? (chunk) => {
+                    // Remove download message once we start getting chunks
+                    if (downloadMsgId) {
+                        setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
+                        downloadMsgId = ''; // Clear it so we only remove once
+                    }
 
-                      // On first chunk, replace the "thinking" message
-                      if (streamedContent === '') {
-                          streamedContent = chunk;
-                          setMessages((prev) => prev.map(msg =>
-                              msg.id === assistantMsgId
-                                  ? { ...msg, content: chunk, isStreaming: true }
-                                  : msg
-                          ));
-                          return;
-                      }
+                    // On first chunk, replace the "thinking" message
+                    if (streamedContent === '') {
+                        streamedContent = chunk;
+                        setMessages((prev) => prev.map(msg =>
+                            msg.id === assistantMsgId
+                                ? { ...msg, content: chunk, isStreaming: true }
+                                : msg
+                        ));
+                        return;
+                    }
 
-                      // Handle subsequent streaming chunks
-                      streamedContent += chunk;
-                      setMessages((prev) => prev.map(msg =>
-                          msg.id === assistantMsgId
-                              ? { ...msg, content: streamedContent, isStreaming: true }
-                              : msg
-                          ));
-                  } : undefined);
+                    // Handle subsequent streaming chunks
+                    streamedContent += chunk;
+                    setMessages((prev) => prev.map(msg =>
+                        msg.id === assistantMsgId
+                            ? { ...msg, content: streamedContent, isStreaming: true }
+                            : msg
+                    ));
+                } : undefined);
 
             // Clean tool call tags from the response before displaying to user
             const cleanedContent = removeToolCallTags(response.message.content);
@@ -626,7 +626,7 @@ export const AIPanel = ({
 
             // Don't show error message if the inference was cancelled by user
             const isCancelled = error.message?.includes('cancelled by user') ||
-                               error.message?.includes('Inference cancelled');
+                error.message?.includes('Inference cancelled');
 
             if (isCancelled) {
                 // Remove the "thinking" placeholder message if present
@@ -742,7 +742,7 @@ export const AIPanel = ({
                         size="small"
                         title="Configure AI Provider & Model"
                         onClick={() => setShowSettings(!showSettings)}
-                        style={{ color: 'white' }}
+                        style={{ color: tokens.colorNeutralForeground1 }}
                     />
                 </div>
             </div>

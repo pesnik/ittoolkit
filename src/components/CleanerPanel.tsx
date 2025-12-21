@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import {
     makeStyles,
     shorthands,
+    tokens,
     Button,
     Text,
     Subtitle2,
@@ -39,8 +40,8 @@ const useStyles = makeStyles({
         height: '100%',
         ...shorthands.gap('16px'),
         ...shorthands.padding('20px'),
-        backgroundColor: '#1a1a1a', // Slightly darker background for contrast
-        color: 'white',
+        backgroundColor: tokens.colorNeutralBackground1,
+        color: tokens.colorNeutralForeground1,
     },
     header: {
         display: 'flex',
@@ -53,14 +54,14 @@ const useStyles = makeStyles({
         alignItems: 'center',
         justifyContent: 'center',
         ...shorthands.padding('24px'),
-        backgroundColor: '#292929',
+        backgroundColor: tokens.colorNeutralBackground2,
         ...shorthands.borderRadius('8px'),
-        ...shorthands.border('1px', 'solid', '#333'),
+        ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke1),
     },
     listContainer: {
         flexGrow: 1,
         overflowY: 'auto',
-        ...shorthands.border('1px', 'solid', '#333'),
+        ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke1),
         ...shorthands.borderRadius('8px'),
         ...shorthands.padding('10px'),
     },
@@ -76,7 +77,7 @@ const useStyles = makeStyles({
         justifyContent: 'space-between',
         ...shorthands.padding('8px', '16px'),
         ':hover': {
-            backgroundColor: '#333',
+            backgroundColor: tokens.colorNeutralBackground1Hover,
         },
     },
 });
@@ -340,10 +341,10 @@ export const CleanerPanel = () => {
                             <div style={{
                                 maxHeight: '300px',
                                 overflowY: 'auto',
-                                backgroundColor: '#1a1a1a',
+                                backgroundColor: tokens.colorNeutralBackground2,
                                 padding: '12px',
                                 borderRadius: '4px',
-                                border: '1px solid #333',
+                                border: `1px solid ${tokens.colorNeutralStroke1}`,
                             }}>
                                 {cleaningErrors.map((error, index) => (
                                     <Text

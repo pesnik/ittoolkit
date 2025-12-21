@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     makeStyles,
     shorthands,
+    tokens,
     Button,
     Text,
     DataGrid,
@@ -59,6 +60,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FileNode } from '@/types';
 import { FileMetadata } from '@/types/ai-types';
+import { ThemeToggle } from './ThemeToggle';
 
 const useStyles = makeStyles({
     container: {
@@ -82,14 +84,14 @@ const useStyles = makeStyles({
     gridContainer: {
         flexGrow: 1,
         overflowY: 'auto',
-        ...shorthands.border('1px', 'solid', '#333'),
+        ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke1),
         ...shorthands.borderRadius('4px'),
     },
     statusBar: {
         display: 'flex',
         justifyContent: 'space-between',
         paddingTop: '8px',
-        borderTop: '1px solid #333',
+        borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
     },
 });
 
@@ -645,7 +647,7 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                     <Button icon={<ArrowClockwiseRegular />} onClick={() => fetchData(state.path, true)} />
                 </Tooltip>
 
-                <div style={{ width: '1px', height: '20px', background: '#333' }} />
+                <div style={{ width: '1px', height: '20px', background: tokens.colorNeutralStroke1 }} />
 
                 <Tooltip content="Toggle Disk Usage Chart" relationship="label">
                     <Button
@@ -672,6 +674,8 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                         disabled={!onToggleAI}
                     />
                 </Tooltip>
+
+                <ThemeToggle />
 
                 <div className={styles.pathBar}>
                     <BreadcrumbPath
