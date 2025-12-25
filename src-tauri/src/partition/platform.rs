@@ -44,7 +44,7 @@ pub mod windows {
                 model,
                 total_size: size,
                 table_type,
-                partitions,
+                partitions: partitions.clone(),
                 serial_number: serial,
                 status: DiskStatus {
                     is_online: true,
@@ -52,6 +52,18 @@ pub mod windows {
                     smart_status: None, // TODO: Add SMART status
                 },
             };
+
+            // Debug output
+            eprintln!("DEBUG: Disk {} ({}) has {} partitions:", index, device_id, partitions.len());
+            for part in &partitions {
+                eprintln!(
+                    "  Partition {}: {} offset={}GB size={}GB",
+                    part.number,
+                    part.mount_point.as_ref().unwrap_or(&"(no mount)".to_string()),
+                    part.start_offset / (1024 * 1024 * 1024),
+                    part.total_size / (1024 * 1024 * 1024)
+                );
+            }
 
             result.push(disk_info);
         }
