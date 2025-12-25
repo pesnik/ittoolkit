@@ -296,24 +296,14 @@ export function PartitionManager() {
                       <TableCell>{partition.mount_point || '-'}</TableCell>
                       <TableCell>{partition.is_mounted ? 'Mounted' : 'Not Mounted'}</TableCell>
                       <TableCell>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <Button
-                            size="small"
-                            appearance="subtle"
-                            icon={<ResizeRegular />}
-                            onClick={() => handleResizePartition(partition)}
-                          >
-                            Resize
-                          </Button>
-                          <Button
-                            size="small"
-                            appearance="subtle"
-                            icon={<ArrowSwap24Regular />}
-                            onClick={() => handleReallocateSpace(partition)}
-                          >
-                            Reallocate
-                          </Button>
-                        </div>
+                        <Button
+                          size="small"
+                          appearance="subtle"
+                          icon={<ResizeRegular />}
+                          onClick={() => handleResizePartition(partition)}
+                        >
+                          Manage Space
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -341,6 +331,10 @@ export function PartitionManager() {
             setSelectedPartition(null);
           }}
           onSuccess={handleResizeSuccess}
+          onReallocate={() => {
+            // Trigger the space input dialog
+            setInputDialogOpen(true);
+          }}
         />
       )}
 

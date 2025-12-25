@@ -40,10 +40,10 @@ export const SpaceInputDialog: React.FC<SpaceInputDialogProps> = ({
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
       <DialogSurface className={styles.dialog}>
         <DialogBody>
-          <DialogTitle>How much space do you need?</DialogTitle>
+          <DialogTitle>Take Space from Other Partitions</DialogTitle>
           <DialogContent className={styles.content}>
             <Text>
-              Specify how much additional space you want to add to {partitionName}
+              How much additional space do you need for {partitionName}?
             </Text>
 
             <Field label="Additional Space (GB)">
@@ -57,7 +57,15 @@ export const SpaceInputDialog: React.FC<SpaceInputDialogProps> = ({
             </Field>
 
             <Text size={200} style={{ marginTop: '8px', opacity: 0.8 }}>
-              The wizard will analyze your disk and show you how to free up this space from other partitions.
+              <strong>How this works:</strong>
+            </Text>
+            <ul style={{ marginTop: '4px', opacity: 0.8, fontSize: '12px', paddingLeft: '20px' }}>
+              <li>We'll shrink other partitions (like E: or F:) to create free space</li>
+              <li>If needed, we'll move partitions to make the free space adjacent</li>
+              <li>Then we'll expand {partitionName} into the freed space</li>
+            </ul>
+            <Text size={200} style={{ marginTop: '8px', opacity: 0.8, fontStyle: 'italic' }}>
+              ⚠️ You'll need to back up any data on partitions that will be modified.
             </Text>
           </DialogContent>
           <DialogActions>
@@ -65,7 +73,7 @@ export const SpaceInputDialog: React.FC<SpaceInputDialogProps> = ({
               Cancel
             </Button>
             <Button appearance="primary" onClick={handleConfirm}>
-              Continue
+              Analyze Disk
             </Button>
           </DialogActions>
         </DialogBody>

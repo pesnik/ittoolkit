@@ -114,9 +114,10 @@ interface ResizeDialogProps {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  onReallocate?: () => void;
 }
 
-export function ResizeDialog({ partition, diskInfo, open, onClose, onSuccess }: ResizeDialogProps) {
+export function ResizeDialog({ partition, diskInfo, open, onClose, onSuccess, onReallocate }: ResizeDialogProps) {
   const styles = useStyles();
   const [mode, setMode] = useState<'expand' | 'shrink'>('expand');
   const [targetSize, setTargetSize] = useState(partition.total_size);
@@ -127,6 +128,7 @@ export function ResizeDialog({ partition, diskInfo, open, onClose, onSuccess }: 
   const [progress, setProgress] = useState<ResizeProgress | null>(null);
   const [showBackupDialog, setShowBackupDialog] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [showReallocateOption, setShowReallocateOption] = useState(false);
 
   // Calculate min/max in GB for slider
   const minSizeGB = partition.used_space
@@ -390,6 +392,35 @@ export function ResizeDialog({ partition, diskInfo, open, onClose, onSuccess }: 
                       {validation.has_adjacent_space && (
                         <> (Adjacent space: {formatBytes(validation.adjacent_space)})</>
                       )}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {/* Show reallocate option if no adjacent space for expansion */}
+                {mode === 'expand' && !validation.is_valid && validation.errors.some(e => e.includes('Not enough adjacent space')) && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <Text weight="semibold">Need more space?</Text>
+                      <Text size={200} style={{ marginTop: '8px' }}>
+                        This partition doesn't have enough free space directly after it. You can:
+                      </Text>
+                      <ul style={{ marginTop: '8px', marginBottom: '8px' }}>
+                        <li><strong>Shrink other partitions</strong> (like E: or F:) to free up space</li>
+                        <li><strong>Move partitions</strong> to create adjacent free space</li>
+                      </ul>
+                      <Button
+                        appearance="primary"
+                        size="small"
+                        onClick={() => {
+                          onClose();
+                          if (onReallocate) {
+                            onReallocate();
+                          }
+                        }}
+                        style={{ marginTop: '8px' }}
+                      >
+                        Take Space from Other Partitions
+                      </Button>
                     </MessageBarBody>
                   </MessageBar>
                 )}
