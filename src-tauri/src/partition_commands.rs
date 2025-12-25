@@ -146,6 +146,26 @@ pub async fn create_space_reallocation_plan(
     .map_err(|e| e.to_string())
 }
 
+/// Unmount a partition
+#[command]
+pub async fn unmount_partition(partition_id: String) -> Result<(), String> {
+    let partition = partition::get_partition_info(&partition_id)
+        .map_err(|e| e.to_string())?;
+
+    partition::unmount_partition(&partition)
+        .map_err(|e| e.to_string())
+}
+
+/// Mount a partition
+#[command]
+pub async fn mount_partition(partition_id: String) -> Result<(), String> {
+    let partition = partition::get_partition_info(&partition_id)
+        .map_err(|e| e.to_string())?;
+
+    partition::mount_partition(&partition)
+        .map_err(|e| e.to_string())
+}
+
 /// Format bytes to human-readable size
 fn format_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];

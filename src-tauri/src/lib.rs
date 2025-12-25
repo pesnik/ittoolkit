@@ -69,7 +69,9 @@ pub fn run() {
         partition_commands::validate_shrink_partition,
         partition_commands::expand_partition,
         partition_commands::shrink_partition,
-        partition_commands::create_space_reallocation_plan
+        partition_commands::create_space_reallocation_plan,
+        partition_commands::unmount_partition,
+        partition_commands::mount_partition
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

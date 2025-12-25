@@ -377,7 +377,27 @@ export function ResizeDialog({ partition, diskInfo, open, onClose, onSuccess, on
               <div className={styles.validation}>
                 {validation.errors.map((error, idx) => (
                   <MessageBar key={`error-${idx}`} intent="error">
-                    <MessageBarBody>{error}</MessageBarBody>
+                    <MessageBarBody>
+                      {error}
+                      {error.includes('must be unmounted') && partition.is_mounted && (
+                        <div style={{ marginTop: '8px' }}>
+                          <Button
+                            size="small"
+                            appearance="primary"
+                            onClick={async () => {
+                              try {
+                                await invoke('unmount_partition', { partitionId: partition.id });
+                                alert('Partition unmounted successfully! Please click Validate again.');
+                              } catch (err) {
+                                alert(`Failed to unmount: ${err}`);
+                              }
+                            }}
+                          >
+                            Unmount Partition
+                          </Button>
+                        </div>
+                      )}
+                    </MessageBarBody>
                   </MessageBar>
                 ))}
                 {validation.warnings.map((warning, idx) => (
