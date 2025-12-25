@@ -29,15 +29,28 @@ async fn shrink_windows(partition: &PartitionInfo, target_size: u64) -> Result<(
     use std::io::Write;
 
     // Convert bytes to MB for diskpart
-    let target_size_mb = target_size / (1024 * 1024);
     let shrink_amount_mb = (partition.total_size - target_size) / (1024 * 1024);
 
     // Create diskpart script
-    let script_content = format!(
-        "select volume {}\nShrink desired={}\n",
-        partition.mount_point.as_ref().ok_or_else(|| anyhow!("No mount point"))?,
-        shrink_amount_mb
-    );
+    // If partition is mounted (has drive letter), use volume selection
+    // If unmounted, we need to use disk and partition number
+    let script_content = if let Some(mount_point) = &partition.mount_point {
+        // Extract drive letter from mount point (e.g., "C:" -> "C")
+        let drive_letter = mount_point.chars().next()
+            .ok_or_else(|| anyhow!("Invalid mount point format"))?;
+        format!(
+            "select volume {}\nShrink desired={}\n",
+            drive_letter,
+            shrink_amount_mb
+        )
+    } else {
+        // For unmounted partitions, we need disk number and partition number
+        // Parse device_path to get these (e.g., "\\.\PHYSICALDRIVE0" and partition number)
+        // Note: This is a simplified approach - may need refinement
+        return Err(anyhow!(
+            "Cannot shrink unmounted partition on Windows. Please mount the partition first or use Disk Management."
+        ));
+    };
 
     let script_path = std::env::temp_dir().join("shrink_partition.txt");
     let mut file = fs::File::create(&script_path)?;
@@ -54,8 +67,13 @@ async fn shrink_windows(partition: &PartitionInfo, target_size: u64) -> Result<(
     let _ = fs::remove_file(&script_path);
 
     if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Diskpart shrink failed: {}", error));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "Diskpart shrink failed.\nStdout: {}\nStderr: {}",
+            stdout,
+            stderr
+        ));
     }
 
     // Verify the operation

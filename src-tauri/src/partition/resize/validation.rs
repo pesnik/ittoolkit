@@ -160,21 +160,23 @@ pub fn validate_shrink(
         );
     }
 
-    // Check 3: Partition must NOT be mounted for shrink operations
-    if partition.is_mounted {
-        result.errors.push(
-            "Partition must be unmounted before shrinking. This is a safety requirement.".to_string()
-        );
-        result.is_valid = false;
-    }
-
-    // Check 4: Filesystem support check
+    // Check 3: Filesystem support check
+    // Note: On Windows, diskpart can shrink mounted NTFS volumes
+    // On Linux/macOS, we may need to unmount first (handled in shrink operation)
     if !partition.filesystem.supports_resize() {
         result.is_valid = false;
         result.errors.push(format!(
             "Filesystem type '{}' does not support resize operations",
             partition.filesystem.display_name()
         ));
+    }
+
+    // Check 4: Mounted partition warnings (Windows can shrink mounted volumes)
+    #[cfg(not(target_os = "windows"))]
+    if partition.is_mounted {
+        result.warnings.push(
+            "This partition is mounted. You may need to unmount it before shrinking on this OS.".to_string()
+        );
     }
 
     // Check 5: Boot partition warning
