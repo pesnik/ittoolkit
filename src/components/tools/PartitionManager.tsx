@@ -101,14 +101,15 @@ interface PartitionInfo {
   id: string;
   number: number;
   device_path: string;
-  label?: string;
+  label: string | null;
   start_offset: number;
   total_size: number;
-  used_space?: number;
-  partition_type: string;
-  filesystem: string;
-  mount_point?: string;
+  used_space: number | null;
+  partition_type: 'Primary' | 'Extended' | 'Logical' | 'Normal' | 'Unknown';
+  filesystem: 'NTFS' | 'Ext2' | 'Ext3' | 'Ext4' | 'FAT32' | 'ExFAT' | 'APFS' | 'HFSPlus' | 'RAW' | 'Unknown';
+  mount_point: string | null;
   is_mounted: boolean;
+  flags: string[];
 }
 
 function formatBytes(bytes: number): string {
