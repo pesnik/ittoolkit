@@ -60,18 +60,24 @@ async fn expand_partition_table_windows(
         .and_then(|m| m.chars().next())
         .ok_or_else(|| anyhow!("No drive letter found for partition"))?;
 
-    let size_mb = target_size / (1024 * 1024);
+    // Calculate size increase in MB (diskpart extend uses size increase, not absolute size)
+    let current_size = partition.total_size;
+    let size_increase_mb = (target_size.saturating_sub(current_size)) / (1024 * 1024);
+
+    if size_increase_mb == 0 {
+        return Err(anyhow!("Target size must be larger than current size"));
+    }
 
     // Create diskpart script
     let script = format!(
         "select volume {}\nextend size={}\n",
         drive_letter,
-        size_mb
+        size_increase_mb
     );
 
     // Write script to temp file
     let script_path = std::env::temp_dir().join("diskpart_expand.txt");
-    std::fs::write(&script_path, script)?;
+    std::fs::write(&script_path, &script)?;
 
     // Execute diskpart
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -85,10 +91,24 @@ async fn expand_partition_table_windows(
     // Clean up temp file
     let _ = std::fs::remove_file(&script_path);
 
-    if !output.status.success() {
+    // Capture both stdout and stderr for better error reporting
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() || stdout.contains("failed") || stdout.contains("error") {
+        let error_msg = if !stderr.is_empty() {
+            stderr.to_string()
+        } else if !stdout.is_empty() {
+            stdout.to_string()
+        } else {
+            "Unknown diskpart error".to_string()
+        };
+
         return Err(anyhow!(
-            "Diskpart failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "Diskpart failed: {}\n\nScript used:\n{}\n\nFull output:\n{}",
+            error_msg.trim(),
+            script,
+            stdout
         ));
     }
 
