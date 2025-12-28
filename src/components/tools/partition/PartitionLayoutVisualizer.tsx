@@ -144,7 +144,8 @@ export function PartitionLayoutVisualizer({
 
     sortedPartitions.forEach((part, index) => {
       // Add unallocated space before this partition if any
-      if (part.start_offset > currentOffset) {
+      // Only show if > 10MB to avoid tiny alignment gaps
+      if (part.start_offset > currentOffset && (part.start_offset - currentOffset) > 10 * 1024 * 1024) {
         segments.push({
           id: `unalloc-${index}`,
           label: 'Unallocated',
@@ -174,7 +175,7 @@ export function PartitionLayoutVisualizer({
     });
 
     // Add trailing unallocated space if any
-    if (currentOffset < diskSize) {
+    if (currentOffset < diskSize && (diskSize - currentOffset) > 10 * 1024 * 1024) {
       segments.push({
         id: `unalloc-end`,
         label: 'Unallocated',
@@ -296,6 +297,10 @@ export function PartitionLayoutVisualizer({
     }
   };
 
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
   const handleDrop = (e: React.DragEvent, dropIndex: number) => {
     e.preventDefault();
     if (draggedIndex === null || draggedIndex === dropIndex) return;
@@ -371,6 +376,7 @@ export function PartitionLayoutVisualizer({
                     draggable={segment.canMove}
                     onDragStart={(e) => handleDragStart(e, index)}
                     onDragOver={(e) => handleDragOver(e, index)}
+                    onDragEnter={handleDragEnter}
                     onDrop={(e) => handleDrop(e, index)}
                     title={segment.canMove ? "Drag to move" : "Cannot move system partition"}
                   >
