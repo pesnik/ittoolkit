@@ -279,72 +279,75 @@ export function PartitionLayoutVisualizer({
   };
 
   // Drag and Drop Logic
+  // We avoid setting state in handleDragStart to prevent React re-renders from cancelling the drag.
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
-    console.log(`[DnD] Drag Start Initial: index=${index}, id=${proposedLayout[index].id}`);
+    console.log(`[DnD] Drag Start: index=${index}`);
 
-    // Set dataTransfer first
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', index.toString());
+      e.dataTransfer.setData('application/json', JSON.stringify({ index }));
     }
-
-    // Defer setting the state to avoid interfering with the browser's drag initiation
-    setTimeout(() => {
-      setDraggedIndex(index);
-      console.log(`[DnD] DraggedIndex set to ${index}`);
-    }, 0);
+    // No setDraggedIndex(index) here!
   };
 
   const handleDragOver = (e: React.DragEvent, index?: number) => {
-    e.preventDefault(); // allow dropping
+    e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = 'move';
     }
+    return false;
   };
 
   const handleDragEnter = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log(`[DnD] Drag Enter: targetIndex=${index}, id=${proposedLayout[index].id}`);
   };
 
   const handleDrop = (e: React.DragEvent, dropIndex?: number) => {
     e.preventDefault();
     e.stopPropagation();
 
-    // If dropIndex isn't provided (dropped on container), we might want to default to end
-    // For now, let's just log it.
-    console.log(`[DnD] Drop Action: draggedIndex=${draggedIndex}, dropIndex=${dropIndex}`);
+    let sourceIndex: number | null = null;
+    try {
+      const data = e.dataTransfer.getData('application/json');
+      if (data) {
+        sourceIndex = JSON.parse(data).index;
+      }
+    } catch (err) {
+      console.error('[DnD] Failed to parse drag data', err);
+    }
 
-    if (draggedIndex === null) {
-      console.warn('[DnD] Drop occurred but draggedIndex is null');
+    console.log(`[DnD] Drop Action: source=${sourceIndex}, target=${dropIndex}`);
+
+    if (sourceIndex === null) {
+      console.warn('[DnD] Drop occurred but sourceIndex is null');
       return;
     }
 
     // If dropped on the container itself without a specific dropIndex, use the last index
     const actualDropIndex = dropIndex !== undefined ? dropIndex : proposedLayout.length - 1;
 
-    if (draggedIndex === actualDropIndex) {
-      console.log('[DnD] Dropped on same index or same relative position, ignoring');
+    if (sourceIndex === actualDropIndex) {
+      console.log('[DnD] Dropped on same position, ignoring');
       return;
     }
 
     const newLayout = [...proposedLayout];
-    const itemToMove = newLayout[draggedIndex];
-    if (!itemToMove.canMove) {
-      console.error('[DnD] Item at draggedIndex cannot move', itemToMove);
+    const itemToMove = newLayout[sourceIndex];
+    if (!itemToMove || !itemToMove.canMove) {
+      console.error('[DnD] Item cannot move', itemToMove);
       return;
     }
 
     // Remove from old position
-    newLayout.splice(draggedIndex, 1);
+    newLayout.splice(sourceIndex, 1);
     // Insert at new position
     newLayout.splice(actualDropIndex, 0, itemToMove);
 
-    console.log(`[DnD] Reordering layout. Moving ${itemToMove.label} from ${draggedIndex} to ${actualDropIndex}`);
+    console.log(`[DnD] Success: Moving ${itemToMove.label} to index ${actualDropIndex}`);
 
     // Recalculate offsets
     let offset = 0;
@@ -356,12 +359,10 @@ export function PartitionLayoutVisualizer({
 
     setProposedLayout(finalLayout);
     setHasChanges(true);
-    setDraggedIndex(null);
   };
 
   const handleDragEnd = (e: React.DragEvent) => {
-    console.log('[DnD] Drag End');
-    setDraggedIndex(null);
+    // Clean up if needed
   };
 
   return (
