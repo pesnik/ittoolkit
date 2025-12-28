@@ -307,7 +307,7 @@ export function PartitionLayoutVisualizer({
     const operations: MoveOperation[] = [];
 
     currentLayout.forEach(current => {
-      if (current.isUnallocated) return;
+      if (current.isUnallocated || current.isSystem) return;
 
       const proposed = proposedLayout.find(p => p.id === current.id);
       if (proposed && proposed.startOffset !== current.startOffset) {
