@@ -144,7 +144,18 @@ export function PartitionManager() {
     try {
       const result = await invoke<DiskInfo[]>('get_disks');
       setDisks(result);
-      if (result.length > 0 && !selectedDisk) {
+      if (selectedDisk) {
+        // Update selected disk with fresh data
+        const updated = result.find(d => d.id === selectedDisk.id);
+        if (updated) {
+          setSelectedDisk(updated);
+        } else if (result.length > 0) {
+          // If selected disk presumably disappeared (rare), select first
+          setSelectedDisk(result[0]);
+        } else {
+          setSelectedDisk(null);
+        }
+      } else if (result.length > 0) {
         setSelectedDisk(result[0]);
       }
     } catch (err) {
