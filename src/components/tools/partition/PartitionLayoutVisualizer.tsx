@@ -145,8 +145,7 @@ export function PartitionLayoutVisualizer({
     sortedPartitions.forEach((part, index) => {
       // Add unallocated space before this partition if any
       // Add unallocated space before this partition if any
-      // Only show if > 1MB to avoid alignment gaps
-      if (part.start_offset > currentOffset && (part.start_offset - currentOffset) > 1024 * 1024) {
+      if (part.start_offset > currentOffset) {
         segments.push({
           id: `unalloc-${index}`,
           label: 'Unallocated',
@@ -176,7 +175,7 @@ export function PartitionLayoutVisualizer({
     });
 
     // Add trailing unallocated space if any
-    if (currentOffset < diskSize && (diskSize - currentOffset) > 1024 * 1024) {
+    if (currentOffset < diskSize) {
       segments.push({
         id: `unalloc-end`,
         label: 'Unallocated',
