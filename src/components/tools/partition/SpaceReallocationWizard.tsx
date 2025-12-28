@@ -133,7 +133,7 @@ export const SpaceReallocationWizard: React.FC<SpaceReallocationWizardProps> = (
         // Execute delete partition command
         // The plan's source_partitions contains the partitions to delete
         for (const source of plan!.source_partitions) {
-          if (source.action === 'Delete' || source.action === 'DeleteAndRecreate') {
+          if ('DeleteEntirely' in source.action || 'ShrinkAndDelete' in source.action) {
             console.log(`Deleting partition: ${source.partition_id}`);
             await invoke('delete_partition', {
               partitionId: source.partition_id,
