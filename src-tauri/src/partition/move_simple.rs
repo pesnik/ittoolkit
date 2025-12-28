@@ -208,7 +208,7 @@ pub async fn execute_simple_move(
         "Partition moving requires manual backup and restore. \
          Please use this feature as a planning tool, then:\n\
          1. Backup your data manually\n\
-         2. Use Windows Disk Management or a tool like MiniTool to move the partition\n\
+         2. Use Windows Disk Management or other tools to move the partition\n\
          3. Restore your data if needed"
     ))
 }

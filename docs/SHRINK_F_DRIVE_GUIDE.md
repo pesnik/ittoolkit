@@ -85,19 +85,13 @@ If you don't want to use the wizard:
 [C: 65GB] [E: 5GB] [F: 15GB] [UNALLOCATED: 15GB]
 ```
 
-#### Option C: Use Third-Party Partition Tools
-
-Tools like **MiniTool Partition Wizard** or **EaseUS Partition Master** can move partitions without deleting them:
-
-1. Download free partition manager (MiniTool/EaseUS)
-2. Select **E: partition**
-3. Click **"Move/Resize"**
-4. Drag E: to the **right** (toward the unallocated space at the end)
-5. Apply changes (this will take time!)
-6. Once E: is moved, the space before it is now unallocated
-7. Expand C: into that unallocated space
-
-This is safer but slower (can take hours for large partitions).
+#### Option C: use the new Partition Reorganization feature
+    
+You can now use the built-in "Reorganize Partitions" feature in this app to move partitions around.
+1. Open the Partition Manager
+2. Select your disk
+3. Click "Reorganize Partitions"
+4. Follow the on-screen instructions
 
 ## Understanding the Problem
 
@@ -191,7 +185,7 @@ After you successfully shrink F: drive:
 
 1. **Option 1**: Use the Reallocation Wizard (backup E: first!)
 2. **Option 2**: Manually delete E:, expand C:, recreate E:
-3. **Option 3**: Use third-party partition tool to move E:
+3. **Option 3**: Use the built-in reorganization tool to move E:
 
 Choose based on:
 - Your comfort level with partition operations

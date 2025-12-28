@@ -1,5 +1,5 @@
 // Visual partition layout editor with drag-and-drop
-// Similar to MiniTool Partition Wizard's interface
+// Visual partition layout editor with drag-and-drop
 
 import React, { useState } from 'react';
 import {

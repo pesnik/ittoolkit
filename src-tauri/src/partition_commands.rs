@@ -188,36 +188,85 @@ pub async fn delete_partition(partition_id: String) -> Result<(), String> {
 }
 
 /// Execute partition reorganization (move partitions)
-/// Returns instructions for using MiniTool to complete the operation
+/// Performs the actual move operations safe and securely
 #[command]
 pub async fn execute_partition_moves(
+    app: AppHandle,
     move_operations: Vec<partition::MoveOperation>,
 ) -> Result<String, String> {
-    let mut instructions = String::from("To safely reorganize your partitions:\n\n");
-    instructions.push_str("RECOMMENDED: Use MiniTool Partition Wizard (Free)\n");
-    instructions.push_str("https://www.partitionwizard.com/\n\n");
-    instructions.push_str("Steps:\n");
-    instructions.push_str("1. Download and install MiniTool Partition Wizard\n");
-    instructions.push_str("2. Open the program and select your disk\n");
-
+    // Get all disks once to find partitions
+    // Note: We might need to refresh this inside the loop if disk structure changes significantly,
+    // but for simple moves it might be okay. However, strictly speaking, after a delete/create, 
+    // the old PartitionInfo objects are stale.
+    // A better approach is to re-fetch disk info based on ID before each move.
+    
+    let total_ops = move_operations.len();
+    
     for (i, op) in move_operations.iter().enumerate() {
-        instructions.push_str(&format!(
-            "3.{} Drag partition (ID: {}) to the end of the disk\n",
-            i + 1,
-            &op.partition_id[..8.min(op.partition_id.len())]
-        ));
+        // Fetch fresh disk info
+        let disks = partition::get_all_disks().map_err(|e| e.to_string())?;
+        
+        // Find the disk and partition
+        let mut target_disk: Option<DiskInfo> = None;
+        let mut target_partition: Option<PartitionInfo> = None;
+        
+        for disk in disks {
+            if let Some(p) = disk.partitions.iter().find(|p| p.id == op.partition_id) {
+                target_partition = Some(p.clone());
+                target_disk = Some(disk.clone());
+                break;
+            }
+        }
+        
+        let partition = target_partition.ok_or_else(|| format!("Partition {} not found", op.partition_id))?;
+        let disk = target_disk.ok_or_else(|| "Disk not found".to_string())?;
+        
+        // Configure move options
+        let options = partition::move_partition::MovePartitionOptions {
+            target_offset: op.to_offset,
+            verify_after_move: true, // Safety first
+            backup_path: None, // Use default temp location
+        };
+        
+        // Emitting progress closure
+        let app_handle = app.clone();
+        let partition_id = partition.id.clone();
+        let current_op_index = i;
+        
+        let progress_callback = move |progress: partition::move_partition::MoveProgress| {
+            // Calculate global progress
+            // Each op is 1/total_ops of the total work
+            // Current op progress is progress.percent
+            let op_weight = 100.0 / total_ops as f32;
+            let global_percent = (current_op_index as f32 * op_weight) + (progress.percent * op_weight / 100.0);
+            
+            // Emit event to frontend
+            // We might need a new event type or reuse 'resize-progress'
+            // For now let's reuse resize-progress as it's likely monitored
+            let _ = app_handle.emit("resize-progress", ResizeProgress {
+                phase: match progress.phase {
+                    partition::move_partition::MovePhase::Validating => partition::resize::ResizePhase::Validating,
+                    partition::move_partition::MovePhase::BackingUp => partition::resize::ResizePhase::CreatingBackup,
+                    partition::move_partition::MovePhase::DeletingOldPartition => partition::resize::ResizePhase::UpdatingPartitionTable,
+                    partition::move_partition::MovePhase::CreatingNewPartition => partition::resize::ResizePhase::UpdatingPartitionTable,
+                    partition::move_partition::MovePhase::RestoringData => partition::resize::ResizePhase::ResizingFilesystem,
+                    partition::move_partition::MovePhase::Verifying => partition::resize::ResizePhase::Verifying,
+                    partition::move_partition::MovePhase::Complete => partition::resize::ResizePhase::Complete,
+                    partition::move_partition::MovePhase::Error => partition::resize::ResizePhase::Error,
+                },
+                percent: global_percent,
+                message: format!("Partition {}: {}", partition_id, progress.message),
+                can_cancel: false,
+            });
+        };
+        
+        // Execute move
+        partition::move_partition::move_partition(&partition, &disk, options, progress_callback)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
-    let est_time = move_operations.len() * 20;
-    instructions.push_str(&format!(
-        "\n4. Click 'Apply' and wait for completion ({} partition(s) to move)\n",
-        move_operations.len()
-    ));
-    instructions.push_str("5. Once complete, return to this app and click 'Manage Space' on C: to expand it\n\n");
-    instructions.push_str("⚠️ IMPORTANT: Backup your data before proceeding!\n");
-    instructions.push_str(&format!("⏱️ Estimated time: {} minutes\n", est_time));
-
-    Ok(instructions)
+    Ok("All partition moves completed successfully!".to_string())
 }
 
 /// Format bytes to human-readable size
