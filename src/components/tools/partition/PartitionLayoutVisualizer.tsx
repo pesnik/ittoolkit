@@ -88,6 +88,18 @@ const useStyles = makeStyles({
     fontSize: '24px',
     color: tokens.colorBrandForeground1,
   },
+  segmentActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXXS,
+    marginTop: tokens.spacingVerticalXS,
+    opacity: 0,
+    transition: 'opacity 0.2s ease',
+  },
+  partitionHover: {
+    ':hover .segmentActions': {
+      opacity: 1,
+    },
+  },
 });
 
 interface PartitionSegment {
@@ -210,40 +222,64 @@ export function PartitionLayoutVisualizer({
 
   const getPartitionWidth = (segment: PartitionSegment): string => {
     const percentage = (segment.size / diskSize) * 100;
+    // Ensure we return the percentage as a string for use in flexBasis or width
     return `${percentage}%`;
   };
 
-  const handleMoveToEnd = (partitionId: string) => {
-    // Move the selected partition to the end
+  const updateOffsets = (layout: PartitionSegment[]): PartitionSegment[] => {
+    let offset = 0;
+    return layout.map(segment => {
+      const newSegment = { ...segment, startOffset: offset };
+      offset += segment.size;
+      return newSegment;
+    });
+  };
+
+  const handleMove = (index: number, direction: 'left' | 'right') => {
     const newLayout = [...proposedLayout];
-    const partIndex = newLayout.findIndex(p => p.id === partitionId);
+    const targetIndex = direction === 'left' ? index - 1 : index + 1;
 
-    if (partIndex === -1) return;
+    if (targetIndex < 0 || targetIndex >= newLayout.length) return;
 
-    const partition = newLayout[partIndex];
-    if (!partition.canMove) return;
+    // Swap elements
+    [newLayout[index], newLayout[targetIndex]] = [newLayout[targetIndex], newLayout[index]];
 
-    // Remove partition from current position
-    newLayout.splice(partIndex, 1);
+    const finalLayout = updateOffsets(newLayout);
+    setProposedLayout(finalLayout);
+    setHasChanges(true);
+  };
+
+  const handleMoveToEnd = (identifier: string | number) => {
+    // Move the selected partition/segment to the end
+    const newLayout = [...proposedLayout];
+    let index = -1;
+
+    if (typeof identifier === 'number') {
+      index = identifier;
+    } else {
+      index = newLayout.findIndex(p => p.id === identifier);
+    }
+
+    if (index === -1) return;
+
+    const item = newLayout[index];
+    if (!item.canMove) return;
+
+    // Remove from current position
+    newLayout.splice(index, 1);
 
     // Find last unallocated space or create one
     const lastUnallocIndex = newLayout.length - 1;
 
     // Insert partition at the end, before last unallocated if exists
     if (newLayout[lastUnallocIndex]?.isUnallocated) {
-      newLayout.splice(lastUnallocIndex, 0, partition);
+      newLayout.splice(lastUnallocIndex, 0, item);
     } else {
-      newLayout.push(partition);
+      newLayout.push(item);
     }
 
     // Recalculate all offsets
-    let offset = 0;
-    const finalLayout = newLayout.map(segment => {
-      const newSegment = { ...segment, startOffset: offset };
-      offset += segment.size;
-      return newSegment;
-    });
-
+    const finalLayout = updateOffsets(newLayout);
     setProposedLayout(finalLayout);
     setHasChanges(true);
   };
@@ -278,97 +314,7 @@ export function PartitionLayoutVisualizer({
     setHasChanges(false);
   };
 
-  // Drag and Drop Logic
-  // We keep draggedIndex for visual feedback *after* the drag has stablely started.
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    console.log(`[DnD] Drag Start: index=${index}`);
-
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'move';
-      // Use text/plain for widest compatibility
-      e.dataTransfer.setData('text/plain', index.toString());
-    }
-
-    // Set a timeout to update visual state. This prevents React from re-rendering
-    // the element exactly as the browser is trying to capture the drag image.
-    setTimeout(() => {
-      setDraggedIndex(index);
-    }, 100);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index?: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = 'move';
-    }
-    return false;
-  };
-
-  const handleDragEnter = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    console.log(`[DnD] Drag Enter target: ${index}`);
-  };
-
-  const handleDrop = (e: React.DragEvent, dropIndex?: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const data = e.dataTransfer.getData('text/plain');
-    const sourceIndex = data ? parseInt(data, 10) : null;
-
-    console.log(`[DnD] Drop Action: source=${sourceIndex}, target=${dropIndex}`);
-
-    if (sourceIndex === null || isNaN(sourceIndex)) {
-      console.warn('[DnD] Drop occurred but sourceIndex is invalid/null');
-      setDraggedIndex(null);
-      return;
-    }
-
-    // If dropped on the container itself without a specific dropIndex, use the last index
-    const actualDropIndex = dropIndex !== undefined ? dropIndex : proposedLayout.length - 1;
-
-    if (sourceIndex === actualDropIndex) {
-      console.log('[DnD] Dropped on same position, ignoring');
-      setDraggedIndex(null);
-      return;
-    }
-
-    const newLayout = [...proposedLayout];
-    const itemToMove = newLayout[sourceIndex];
-    if (!itemToMove || !itemToMove.canMove) {
-      console.error('[DnD] Item cannot move', itemToMove);
-      setDraggedIndex(null);
-      return;
-    }
-
-    // Remove from old position
-    newLayout.splice(sourceIndex, 1);
-    // Insert at new position
-    newLayout.splice(actualDropIndex, 0, itemToMove);
-
-    console.log(`[DnD] Success: Moving ${itemToMove.label} to index ${actualDropIndex}`);
-
-    // Recalculate offsets
-    let offset = 0;
-    const finalLayout = newLayout.map(segment => {
-      const newSegment = { ...segment, startOffset: offset };
-      offset += segment.size;
-      return newSegment;
-    });
-
-    setProposedLayout(finalLayout);
-    setHasChanges(true);
-    setDraggedIndex(null);
-  };
-
-  const handleDragEnd = (e: React.DragEvent) => {
-    console.log('[DnD] Drag End');
-    setDraggedIndex(null);
-  };
 
   return (
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
@@ -405,32 +351,56 @@ export function PartitionLayoutVisualizer({
 
             {/* Proposed Layout (Editable) */}
             <div>
-              <Text weight="semibold">Interactive Layout (Drag to Reorder):</Text>
-              <div
-                className={styles.diskBar}
-                onDragOver={(e) => handleDragOver(e)}
-                onDrop={(e) => handleDrop(e)}
-              >
+              <Text weight="semibold">Proposed layout (Use arrows to reorder):</Text>
+              <div className={styles.diskBar}>
                 {proposedLayout.map((segment, index) => (
                   <div
                     key={segment.id}
-                    className={`${styles.partition} ${getPartitionClass(segment)} ${draggedIndex === index ? styles.dragging : ''}`}
+                    className={`${styles.partition} ${getPartitionClass(segment)} ${styles.partitionHover}`}
                     style={{
-                      width: getPartitionWidth(segment),
-                      cursor: segment.canMove ? 'grab' : 'not-allowed',
-                      opacity: draggedIndex === index ? 0.3 : 1,
-                      height: '100%'
+                      flex: `0 0 ${getPartitionWidth(segment)}`,
+                      boxSizing: 'border-box',
+                      minWidth: 0,
+                      overflow: 'hidden',
                     }}
-                    draggable={segment.canMove}
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDragEnter={(e) => handleDragEnter(e, index)}
-                    onDragEnd={handleDragEnd}
-                    onDrop={(e) => handleDrop(e, index)}
-                    title={segment.canMove ? "Drag to move" : "Cannot move system partition"}
+                    title={segment.isSystem ? "Cannot move system partition" : ""}
                   >
-                    <Text size={200} weight="semibold" style={{ pointerEvents: 'none', userSelect: 'none' }}>{segment.label}</Text>
-                    <Text size={100} style={{ pointerEvents: 'none', userSelect: 'none' }}>{formatSize(segment.size)}</Text>
+                    <Text size={200} weight="semibold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {segment.label}
+                    </Text>
+                    <Text size={100}>{formatSize(segment.size)}</Text>
+
+                    {!segment.isSystem && (
+                      <div className="segmentActions" style={{
+                        display: 'flex',
+                        gap: '4px',
+                        marginTop: '4px',
+                        backgroundColor: 'rgba(0,0,0,0.1)',
+                        padding: '2px',
+                        borderRadius: '4px'
+                      }}>
+                        <Button
+                          size="small"
+                          icon={<Text style={{ fontWeight: 'bold' }}>←</Text>}
+                          disabled={index === 0}
+                          onClick={() => handleMove(index, 'left')}
+                          title="Move Left"
+                        />
+                        <Button
+                          size="small"
+                          icon={<Text style={{ fontWeight: 'bold' }}>→</Text>}
+                          disabled={index === proposedLayout.length - 1}
+                          onClick={() => handleMove(index, 'right')}
+                          title="Move Right"
+                        />
+                        <Button
+                          size="small"
+                          icon={<Text style={{ fontWeight: 'bold' }}>⇥</Text>}
+                          onClick={() => handleMoveToEnd(index)}
+                          title="Move to End"
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
