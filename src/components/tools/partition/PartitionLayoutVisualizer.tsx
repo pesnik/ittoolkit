@@ -153,7 +153,7 @@ export function PartitionLayoutVisualizer({
           isUnallocated: true,
           isSystem: false,
           startOffset: currentOffset,
-          canMove: false,
+          canMove: true,
         });
       }
 
@@ -183,7 +183,7 @@ export function PartitionLayoutVisualizer({
         isUnallocated: true,
         isSystem: false,
         startOffset: currentOffset,
-        canMove: false,
+        canMove: true,
       });
     }
 
@@ -277,6 +277,51 @@ export function PartitionLayoutVisualizer({
     setHasChanges(false);
   };
 
+  // Drag and Drop Logic
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    // Visual feedback
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Optional: Set a custom drag image if needed
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault(); // allow dropping
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === dropIndex) return;
+
+    const newLayout = [...proposedLayout];
+    const itemToMove = newLayout[draggedIndex];
+    if (!itemToMove.canMove) return; // double check
+
+    // Remove from old position
+    newLayout.splice(draggedIndex, 1);
+    // Insert at new position
+    newLayout.splice(dropIndex, 0, itemToMove);
+
+    // Recalculate offsets
+    let offset = 0;
+    const finalLayout = newLayout.map(segment => {
+      const newSegment = { ...segment, startOffset: offset };
+      offset += segment.size;
+      return newSegment;
+    });
+
+    setProposedLayout(finalLayout);
+    setHasChanges(true); // Now we have changes
+    setDraggedIndex(null);
+  };
+
   return (
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
       <DialogSurface style={{ maxWidth: '900px' }}>
@@ -308,26 +353,33 @@ export function PartitionLayoutVisualizer({
             </div>
 
             {/* Arrow */}
-            {hasChanges && <div className={styles.arrow}>↓</div>}
+            <div className={styles.arrow}>↓</div>
 
-            {/* Proposed Layout */}
-            {hasChanges && (
-              <div>
-                <Text weight="semibold">Proposed Layout (After Move):</Text>
-                <div className={styles.diskBar}>
-                  {proposedLayout.map(segment => (
-                    <div
-                      key={segment.id}
-                      className={`${styles.partition} ${getPartitionClass(segment)}`}
-                      style={{ width: getPartitionWidth(segment) }}
-                    >
-                      <Text size={200} weight="semibold">{segment.label}</Text>
-                      <Text size={100}>{formatSize(segment.size)}</Text>
-                    </div>
-                  ))}
-                </div>
+            {/* Proposed Layout (Editable) */}
+            <div>
+              <Text weight="semibold">Interactive Layout (Drag to Reorder):</Text>
+              <div className={styles.diskBar}>
+                {proposedLayout.map((segment, index) => (
+                  <div
+                    key={segment.id}
+                    className={`${styles.partition} ${getPartitionClass(segment)} ${draggedIndex === index ? styles.dragging : ''}`}
+                    style={{
+                      width: getPartitionWidth(segment),
+                      cursor: segment.canMove ? 'grab' : 'not-allowed',
+                      opacity: draggedIndex === index ? 0.5 : 1
+                    }}
+                    draggable={segment.canMove}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDrop={(e) => handleDrop(e, index)}
+                    title={segment.canMove ? "Drag to move" : "Cannot move system partition"}
+                  >
+                    <Text size={200} weight="semibold">{segment.label}</Text>
+                    <Text size={100}>{formatSize(segment.size)}</Text>
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
 
             {/* Action Buttons */}
             <div className={styles.legend}>
