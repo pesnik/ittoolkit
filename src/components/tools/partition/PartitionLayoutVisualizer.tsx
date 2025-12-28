@@ -380,8 +380,8 @@ export function PartitionLayoutVisualizer({
                     onDrop={(e) => handleDrop(e, index)}
                     title={segment.canMove ? "Drag to move" : "Cannot move system partition"}
                   >
-                    <Text size={200} weight="semibold">{segment.label}</Text>
-                    <Text size={100}>{formatSize(segment.size)}</Text>
+                    <Text size={200} weight="semibold" style={{ pointerEvents: 'none' }}>{segment.label}</Text>
+                    <Text size={100} style={{ pointerEvents: 'none' }}>{formatSize(segment.size)}</Text>
                   </div>
                 ))}
               </div>
