@@ -282,10 +282,12 @@ export function PartitionLayoutVisualizer({
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
+    console.log(`[DnD] Drag Start: index=${index}, id=${proposedLayout[index].id}, canMove=${proposedLayout[index].canMove}`);
     setDraggedIndex(index);
     // Visual feedback
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', index.toString());
       // Optional: Set a custom drag image if needed
     }
   };
@@ -297,22 +299,38 @@ export function PartitionLayoutVisualizer({
     }
   };
 
-  const handleDragEnter = (e: React.DragEvent) => {
+  const handleDragEnter = (e: React.DragEvent, index: number) => {
     e.preventDefault();
+    console.log(`[DnD] Drag Enter: targetIndex=${index}, id=${proposedLayout[index].id}`);
   };
 
   const handleDrop = (e: React.DragEvent, dropIndex: number) => {
     e.preventDefault();
-    if (draggedIndex === null || draggedIndex === dropIndex) return;
+    console.log(`[DnD] Drop: draggedIndex=${draggedIndex}, dropIndex=${dropIndex}`);
+
+    if (draggedIndex === null) {
+      console.warn('[DnD] Drop occurred but draggedIndex is null');
+      return;
+    }
+
+    if (draggedIndex === dropIndex) {
+      console.log('[DnD] Dropped on same index, ignoring');
+      return;
+    }
 
     const newLayout = [...proposedLayout];
     const itemToMove = newLayout[draggedIndex];
-    if (!itemToMove.canMove) return; // double check
+    if (!itemToMove.canMove) {
+      console.error('[DnD] Item at draggedIndex cannot move', itemToMove);
+      return;
+    }
 
     // Remove from old position
     newLayout.splice(draggedIndex, 1);
     // Insert at new position
     newLayout.splice(dropIndex, 0, itemToMove);
+
+    console.log(`[DnD] Reordering layout. Moving ${itemToMove.label} from ${draggedIndex} to ${dropIndex}`);
 
     // Recalculate offsets
     let offset = 0;
@@ -324,6 +342,11 @@ export function PartitionLayoutVisualizer({
 
     setProposedLayout(finalLayout);
     setHasChanges(true); // Now we have changes
+    setDraggedIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    console.log('[DnD] Drag End');
     setDraggedIndex(null);
   };
 
@@ -376,7 +399,8 @@ export function PartitionLayoutVisualizer({
                     draggable={segment.canMove}
                     onDragStart={(e) => handleDragStart(e, index)}
                     onDragOver={(e) => handleDragOver(e, index)}
-                    onDragEnter={handleDragEnter}
+                    onDragEnter={(e) => handleDragEnter(e, index)}
+                    onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, index)}
                     title={segment.canMove ? "Drag to move" : "Cannot move system partition"}
                   >
