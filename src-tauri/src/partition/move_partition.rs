@@ -576,19 +576,32 @@ async fn create_partition_at_offset_windows(
     // Get disk number from ID or device path
     // Format is usually "disk-N" or "\\.\PhysicalDriveN"
     let disk_num = if let Some(stripped) = disk.id.strip_prefix("disk-") {
-        stripped
+        stripped.to_string()
     } else {
         // Fallback: try to parse from device path
          disk.device_path.replace("\\\\.\\PhysicalDrive", "")
     };
 
+    // Try to preserve original drive letter
+    let letter_cmd = if let Some(ref mp) = original_partition.mount_point {
+        // mount_point is likely "E:" or "E:\"
+        if let Some(letter) = mp.chars().next() {
+             format!("assign letter={}", letter)
+        } else {
+             "assign".to_string()
+        }
+    } else {
+         "assign".to_string()
+    };
+
     // Construct diskpart script
     // create partition primary size=<size_mb> offset=<offset_kb>
     let script = format!(
-        "select disk {}\ncreate partition primary size={} offset={}\nformat fs=ntfs quick\nassign\n", 
+        "select disk {}\ncreate partition primary size={} offset={}\nformat fs=ntfs quick\n{}\n", 
         disk_num, 
         size_mb, 
-        offset_kb
+        offset_kb,
+        letter_cmd
     );
 
     let script_path = std::env::temp_dir().join("diskpart_create.txt");
