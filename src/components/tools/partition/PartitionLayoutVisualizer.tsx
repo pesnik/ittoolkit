@@ -249,6 +249,17 @@ export function PartitionLayoutVisualizer({
 
     if (targetIndex < 0 || targetIndex >= newLayout.length) return;
 
+    // Check if move is allowed
+    // We prevent moving system partitions (always locked)
+    // We ALSO prevent moving "locked" segments (like unallocated space if we decided to lock it)
+    if (!newLayout[index].canMove) return;
+
+    // NOTE: Swapping with unallocated space is what we usually want to do.
+    // If the valid partition is moving into unallocated space, that's fine.
+    // But if we are swapping two valid partitions, that might be weird?
+    // The visualizer just swaps array positions. 
+    // The actual "move" logic is derived later.
+
     // Swap elements
     [newLayout[index], newLayout[targetIndex]] = [newLayout[targetIndex], newLayout[index]];
 
@@ -366,9 +377,9 @@ export function PartitionLayoutVisualizer({
                     key={segment.id}
                     className={`${styles.partition} ${getPartitionClass(segment)} ${styles.partitionHover}`}
                     style={{
-                      flex: `0 0 ${getPartitionWidth(segment)}`,
+                      flex: `0 1 ${getPartitionWidth(segment)}`,
                       boxSizing: 'border-box',
-                      minWidth: 0,
+                      minWidth: '50px', // Ensure everything is at least somewhat visible
                       overflow: 'hidden',
                     }}
                     title={segment.isSystem ? "Cannot move system partition" : ""}
