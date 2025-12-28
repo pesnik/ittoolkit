@@ -279,7 +279,7 @@ export function PartitionLayoutVisualizer({
   };
 
   // Drag and Drop Logic
-  // We avoid setting state in handleDragStart to prevent React re-renders from cancelling the drag.
+  // We keep draggedIndex for visual feedback *after* the drag has stablely started.
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
@@ -287,9 +287,15 @@ export function PartitionLayoutVisualizer({
 
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('application/json', JSON.stringify({ index }));
+      // Use text/plain for widest compatibility
+      e.dataTransfer.setData('text/plain', index.toString());
     }
-    // No setDraggedIndex(index) here!
+
+    // Set a timeout to update visual state. This prevents React from re-rendering
+    // the element exactly as the browser is trying to capture the drag image.
+    setTimeout(() => {
+      setDraggedIndex(index);
+    }, 100);
   };
 
   const handleDragOver = (e: React.DragEvent, index?: number) => {
@@ -304,26 +310,21 @@ export function PartitionLayoutVisualizer({
   const handleDragEnter = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     e.stopPropagation();
+    console.log(`[DnD] Drag Enter target: ${index}`);
   };
 
   const handleDrop = (e: React.DragEvent, dropIndex?: number) => {
     e.preventDefault();
     e.stopPropagation();
 
-    let sourceIndex: number | null = null;
-    try {
-      const data = e.dataTransfer.getData('application/json');
-      if (data) {
-        sourceIndex = JSON.parse(data).index;
-      }
-    } catch (err) {
-      console.error('[DnD] Failed to parse drag data', err);
-    }
+    const data = e.dataTransfer.getData('text/plain');
+    const sourceIndex = data ? parseInt(data, 10) : null;
 
     console.log(`[DnD] Drop Action: source=${sourceIndex}, target=${dropIndex}`);
 
-    if (sourceIndex === null) {
-      console.warn('[DnD] Drop occurred but sourceIndex is null');
+    if (sourceIndex === null || isNaN(sourceIndex)) {
+      console.warn('[DnD] Drop occurred but sourceIndex is invalid/null');
+      setDraggedIndex(null);
       return;
     }
 
@@ -332,6 +333,7 @@ export function PartitionLayoutVisualizer({
 
     if (sourceIndex === actualDropIndex) {
       console.log('[DnD] Dropped on same position, ignoring');
+      setDraggedIndex(null);
       return;
     }
 
@@ -339,6 +341,7 @@ export function PartitionLayoutVisualizer({
     const itemToMove = newLayout[sourceIndex];
     if (!itemToMove || !itemToMove.canMove) {
       console.error('[DnD] Item cannot move', itemToMove);
+      setDraggedIndex(null);
       return;
     }
 
@@ -359,10 +362,12 @@ export function PartitionLayoutVisualizer({
 
     setProposedLayout(finalLayout);
     setHasChanges(true);
+    setDraggedIndex(null);
   };
 
   const handleDragEnd = (e: React.DragEvent) => {
-    // Clean up if needed
+    console.log('[DnD] Drag End');
+    setDraggedIndex(null);
   };
 
   return (
