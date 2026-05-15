@@ -53,21 +53,16 @@ export const KNOWN_MODELS: ModelConfig[] = [
         modelId: 'gemma:2b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
         recommendedFor: [AIMode.QA], sizeBytes: 1.5e9
     },
-    // Embedded AI (Candle) - Multiple options
+    // LlamaCpp (GGUF) - Local inference via bundled llama.cpp
     {
-        id: 'embedded-qwen1.5', name: 'Qwen1.5-0.5B (Embedded)', provider: ModelProvider.Candle, isAvailable: true,
-        modelId: 'qwen1.5:0.5b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 512, stream: true },
-        recommendedFor: [AIMode.QA], sizeBytes: 500e6
+        id: 'llamacpp-coder05b', name: 'Qwen 2.5 Coder 0.5B (Q8_0)', provider: ModelProvider.LlamaCpp, isAvailable: false,
+        modelId: 'qwen2.5-coder-0.5b-q8_0.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 495e6
     },
     {
-        id: 'embedded-phi2', name: 'Phi-2 (Embedded)', provider: ModelProvider.Candle, isAvailable: true,
-        modelId: 'phi-2', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 512, stream: true },
-        recommendedFor: [AIMode.Agent, AIMode.QA], sizeBytes: 2.7e9
-    },
-    {
-        id: 'embedded-stablelm', name: 'StableLM-2-1.6B (Embedded)', provider: ModelProvider.Candle, isAvailable: true,
-        modelId: 'stablelm-2-1.6b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 512, stream: true },
-        recommendedFor: [AIMode.Agent], sizeBytes: 3.3e9
+        id: 'llamacpp-qwen3b', name: 'Qwen 2.5 VL 3B (Q4_K_M)', provider: ModelProvider.LlamaCpp, isAvailable: false,
+        modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 2.0e9
     }
 ];
 
@@ -270,14 +265,22 @@ export async function runInference(
         return await transformerJS.runTransformerJSInference(requestWithSystem, onChunk, onProgress);
     }
 
-    // For backend providers (Ollama, OpenAI-compatible)
+    // For backend providers (Ollama, OpenAI-compatible, LlamaCpp)
     try {
-        let unlisten: (() => void) | undefined;
+        let unlistenChunk: (() => void) | undefined;
+        let unlistenProgress: (() => void) | undefined;
 
         // Setup streaming listener if onChunk callback is provided
         if (onChunk) {
-            unlisten = await listen<string>('ai-response-chunk', (event) => {
+            unlistenChunk = await listen<string>('ai-response-chunk', (event) => {
                 onChunk(event.payload);
+            });
+        }
+
+        // Setup LlamaCpp download progress listener
+        if (onProgress && request.modelConfig.provider === ModelProvider.LlamaCpp) {
+            unlistenProgress = await listen<any>('llamacpp-download-progress', (event) => {
+                onProgress(event.payload);
             });
         }
 
@@ -285,7 +288,8 @@ export async function runInference(
             request: requestWithSystem,
         });
 
-        if (unlisten) unlisten();
+        if (unlistenChunk) unlistenChunk();
+        if (unlistenProgress) unlistenProgress();
         return response;
     } catch (error: any) {
         console.error('[ai-service] Inference failed:', error);

@@ -52,7 +52,7 @@ function getProviderIcon(provider: ModelProvider) {
             return <GlobeRegular />;
         case ModelProvider.Ollama:
             return <BotRegular />;
-        case ModelProvider.Candle:
+        case ModelProvider.LlamaCpp:
             return <BotRegular />;
         case ModelProvider.OpenAICompatible:
             return <CubeRegular />;
@@ -67,8 +67,8 @@ function getProviderDisplayName(provider: ModelProvider): string {
             return 'Transformer.js';
         case ModelProvider.Ollama:
             return 'Ollama';
-        case ModelProvider.Candle:
-            return 'Embedded AI';
+        case ModelProvider.LlamaCpp:
+            return 'LlamaCpp';
         case ModelProvider.OpenAICompatible:
             return 'OpenAI';
         default:

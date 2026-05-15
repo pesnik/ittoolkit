@@ -92,8 +92,8 @@ function getProviderDisplayName(provider: ModelProvider): string {
             return 'TransformerJS';
         case ModelProvider.Ollama:
             return 'Ollama';
-        case ModelProvider.Candle:
-            return 'Embedded AI';
+        case ModelProvider.LlamaCpp:
+            return 'LlamaCpp';
         case ModelProvider.OpenAICompatible:
             return 'OpenAI';
         default:

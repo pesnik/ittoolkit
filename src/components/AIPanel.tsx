@@ -18,7 +18,6 @@ import {
 import { AISettingsPanel } from './AISettingsPanel';
 import {
     Settings24Regular,
-    ArrowDownload24Regular,
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -115,36 +114,35 @@ export const AIPanel = ({
     // Download state
     const [downloadProgress, setDownloadProgress] = useState<{ status: string; progress: number; modelId: string } | undefined>(undefined);
 
-    // Listen for download progress
-    useEffect(() => {
-        const unlisten = listen('model-download-progress', (event: any) => {
-            const payload = event.payload as { status: string; progress: number };
-            setDownloadProgress({ ...payload, modelId: 'qwen2.5-coder:0.5b' }); // Assume currently downloading embedded model
-
-            // Refresh models when done
-            if (payload.progress >= 1.0) {
-                setTimeout(() => {
-                    setDownloadProgress(undefined);
-                    // Trigger re-fetch of status to make the model available
-                    // We can't easily call initialize() here but we can trigger a state update or reload
-                    window.location.reload(); // Simple brute force for now to ensure state is fresh, or ideally refetch
-                }, 1000);
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, []);
-
     const handleDownloadModel = async (modelId: string, provider: ModelProvider) => {
-        if (provider === ModelProvider.Candle) {
-            try {
-                await invoke('download_model');
-            } catch (error) {
-                console.error('Download failed:', error);
-                alert('Failed to start download: ' + error);
-            }
+        if (provider !== ModelProvider.LlamaCpp) return;
+        setDownloadProgress({ status: 'downloading', progress: 0, modelId });
+
+        let unlisten: (() => void) | undefined;
+        try {
+            unlisten = await listen<{ modelId: string; status: string; progress: number }>(
+                'llamacpp-download-progress',
+                (event) => {
+                    const { status, progress } = event.payload;
+                    if (status === 'completed' || progress >= 1.0) {
+                        setDownloadProgress(undefined);
+                        // Refresh provider status to mark model as available
+                        getProvidersStatus().then((statuses) => {
+                            const allModels: ModelConfig[] = [];
+                            statuses.forEach((s) => allModels.push(...s.availableModels));
+                            setAvailableModels(allModels);
+                        });
+                    } else {
+                        setDownloadProgress({ status, progress, modelId });
+                    }
+                }
+            );
+            await invoke('download_llamacpp_model', { modelId });
+        } catch (error) {
+            console.error('Download failed:', error);
+            setDownloadProgress(undefined);
+        } finally {
+            if (unlisten) unlisten();
         }
     };
 
@@ -154,6 +152,12 @@ export const AIPanel = ({
             try {
                 // Load config first
                 const config = loadAIConfig();
+
+                // Log system recommendation for LlamaCpp
+                invoke('get_llamacpp_recommendation').then((rec: any) => {
+                    console.log('[AIPanel] System RAM:', rec.systemRamGb, 'GB');
+                    console.log('[AIPanel] Recommended model:', rec.recommendedModelName);
+                }).catch(() => {});
 
                 const statuses = await getProvidersStatus();
 
@@ -410,29 +414,7 @@ export const AIPanel = ({
         const sessionId = `session-${Date.now()}`;
         setCurrentSessionId(sessionId);
 
-        // Check if this is embedded AI (Candle) - might need to download
-        const selectedModel = availableModels.find((m) => m.id === selectedModelId);
-        const isEmbeddedAI = selectedModel?.provider === ModelProvider.Candle;
-
-        // Add a download status message for embedded AI
         let downloadMsgId = '';
-        if (isEmbeddedAI) {
-            downloadMsgId = `msg-${Date.now()}-download`;
-
-            // Check if model is available (already downloaded)
-            const isModelDownloaded = selectedModel?.isAvailable;
-            const modelSize = selectedModel?.sizeBytes ? `${(selectedModel.sizeBytes / 1e9).toFixed(1)}GB` : '~1GB';
-
-            const downloadMessage: ChatMessage = {
-                id: downloadMsgId,
-                role: MessageRole.Assistant,
-                content: isModelDownloaded
-                    ? '⚙️ Loading embedded AI model...'
-                    : `📥 Downloading ${selectedModel?.name || 'embedded AI model'} (${modelSize}). First download may take a few minutes...`,
-                timestamp: Date.now(),
-            };
-            setMessages((prev) => [...prev, downloadMessage]);
-        }
 
         try {
             const selectedModel = availableModels.find((m) => m.id === selectedModelId);
@@ -502,6 +484,37 @@ export const AIPanel = ({
             // Use the cleaned messages (not the stale 'messages' variable!)
             const messagesToSend = [...cleanedMessages, userMessage];
 
+            // Shared onProgress callback for LlamaCpp download progress
+            const onProgress = (progress: any) => {
+                const { status, progress: pct } = progress;
+                if (status === 'completed' || pct >= 1.0) {
+                    if (downloadMsgId) {
+                        setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
+                        downloadMsgId = '';
+                    }
+                } else {
+                    const pctDisplay = Math.round((pct || 0) * 100);
+                    if (downloadMsgId) {
+                        setMessages((prev) => prev.map(msg =>
+                            msg.id === downloadMsgId
+                                ? { ...msg, content: `Downloading model... ${pctDisplay}%` }
+                                : msg
+                        ));
+                    } else {
+                        const downloadId = `msg-${Date.now()}-download`;
+                        downloadMsgId = downloadId;
+                        const downloadMessage: ChatMessage = {
+                            id: downloadId,
+                            role: MessageRole.Assistant,
+                            content: `Downloading model... ${pctDisplay}%`,
+                            timestamp: Date.now(),
+                            isStreaming: true,
+                        };
+                        setMessages((prev) => [...prev, downloadMessage]);
+                    }
+                }
+            };
+
             // Use tool-enabled inference for Agent mode, standard inference for QA mode
             const response = mode === AIMode.Agent
                 ? await runInferenceWithTools({
@@ -560,6 +573,7 @@ export const AIPanel = ({
                             console.log(`[AIPanel]    Arguments:`, JSON.stringify(event.arguments, null, 2));
                         }
                     },
+                    onProgress,
                 })
                 : await runInference({
                     sessionId: sessionId,
@@ -592,7 +606,7 @@ export const AIPanel = ({
                             ? { ...msg, content: streamedContent, isStreaming: true }
                             : msg
                     ));
-                } : undefined);
+                } : undefined, onProgress);
 
             // Clean tool call tags from the response before displaying to user
             const cleanedContent = removeToolCallTags(response.message.content);
@@ -685,8 +699,8 @@ export const AIPanel = ({
             case ModelProvider.OpenAICompatible:
                 defaultModelId = config.defaultModels[modeKey].openai;
                 break;
-            case ModelProvider.Candle:
-                defaultModelId = config.defaultModels[modeKey].candle;
+            case ModelProvider.LlamaCpp:
+                defaultModelId = config.defaultModels[modeKey].llamacpp;
                 break;
         }
 
@@ -769,22 +783,9 @@ export const AIPanel = ({
                                 Download the built-in AI engine (approx. 1GB) to enable smart features locally without extra setup.
                             </Text>
 
-                            {downloadProgress ? (
-                                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <div style={{ height: '4px', background: tokens.colorNeutralStroke1, borderRadius: '2px', overflow: 'hidden' }}>
-                                        <div style={{ height: '100%', width: `${downloadProgress.progress * 100}%`, background: tokens.colorBrandBackground }} />
-                                    </div>
-                                    <Text size={200} align="center">{downloadProgress.status} ({Math.round(downloadProgress.progress * 100)}%)</Text>
-                                </div>
-                            ) : (
-                                <Button
-                                    appearance="primary"
-                                    icon={<ArrowDownload24Regular />}
-                                    onClick={() => handleDownloadModel('qwen2.5-coder:0.5b', ModelProvider.Candle)}
-                                >
-                                    Download Embedded AI
-                                </Button>
-                            )}
+                            <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+                                Download the Qwen 2.5 VL 3B model in Settings to get started.
+                            </Text>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '80%' }}>

@@ -13,7 +13,6 @@ export enum ModelProvider {
     OpenAICompatible = 'openai-compatible',
     LlamaCpp = 'llamacpp',
     MLX = 'mlx',
-    Candle = 'candle',
 }
 
 /**

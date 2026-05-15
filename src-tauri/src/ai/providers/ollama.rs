@@ -69,16 +69,15 @@ struct OllamaModel {
 /// Check if Ollama is available
 pub async fn check_ollama_availability(endpoint: Option<&str>) -> Result<bool, AIError> {
     let url = format!("{}/api/tags", endpoint.unwrap_or(DEFAULT_OLLAMA_ENDPOINT));
-    println!("Checking Ollama status at: {}", url);
+    log::debug!("Checking Ollama status at: {}", url);
 
     match reqwest::get(&url).await {
         Ok(response) => {
-            let status = response.status();
-            println!("Ollama response status: {}", status);
-            Ok(status.is_success())
+            log::debug!("Ollama response status: {}", response.status());
+            Ok(response.status().is_success())
         },
         Err(e) => {
-            println!("Ollama connection failed: {}", e);
+            log::debug!("Ollama connection failed: {}", e);
             Ok(false)
         },
     }

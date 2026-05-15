@@ -1,13 +1,14 @@
-// AI Commands - Tauri Commands for AI/LLM Operations
-
 use crate::ai::{
     providers::{
         get_ollama_models, get_ollama_status, get_openai_compatible_status,
         run_ollama_inference, run_openai_compatible_inference,
-        get_candle_status, run_candle_inference, download_embedded_model, check_candle_availability
+        get_llamacpp_status, run_llamacpp_inference, check_llamacpp_availability,
+        download_gguf_model, find_model_by_file, find_model_by_name,
+        recommend_model_for_system, get_system_ram_gb, DownloadStatus,
     },
     InferenceRequest, InferenceResponse, ModelConfig, ModelProvider, ProviderStatus,
 };
+use serde::Serialize;
 use tauri::{command, Emitter, State};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,14 +32,9 @@ impl Default for InferenceState {
 pub async fn get_ai_providers_status(ollama_endpoint: Option<String>) -> Result<Vec<ProviderStatus>, String> {
     let mut statuses = Vec::new();
 
-    // Check Ollama with provided endpoint
     statuses.push(get_ollama_status(ollama_endpoint.as_deref()).await);
 
-    // Check Candle (Embedded)
-    statuses.push(get_candle_status().await);
-
-    // TransformerJS runs in browser, so we don't check it here
-    // OpenAI-compatible requires user configuration, so we skip it
+    statuses.push(get_llamacpp_status().await);
 
     Ok(statuses)
 }
@@ -53,13 +49,11 @@ pub async fn get_provider_models(
         "ollama" => get_ollama_models(endpoint.as_deref())
             .await
             .map_err(|e| e.message),
-        "candle" => {
-            let status = get_candle_status().await;
+        "llamacpp" => {
+            let status = get_llamacpp_status().await;
             Ok(status.available_models)
         }
         "transformerjs" => {
-            // Return hardcoded list of Transformer.js models
-            // These are defined in the frontend
             Ok(vec![])
         }
         _ => Err(format!("Unknown provider: {}", provider)),
@@ -77,7 +71,6 @@ pub async fn cancel_inference(
         token.cancel();
         Ok(())
     } else {
-        // Session not found means it already completed - this is still success from user's perspective
         Ok(())
     }
 }
@@ -89,35 +82,58 @@ pub async fn run_ai_inference(
     request: InferenceRequest,
     state: State<'_, InferenceState>,
 ) -> Result<InferenceResponse, String> {
-    // Create cancellation token for this session
     let cancel_token = CancellationToken::new();
     let session_id = request.session_id.clone();
 
-    // Register the session
     {
         let mut sessions = state.active_sessions.lock().unwrap();
         sessions.insert(session_id.clone(), cancel_token.clone());
     }
 
-    // Run inference with cancellation support
+    // Pre-download LlamaCpp model if missing (with progress events)
+    if request.model_config.provider == ModelProvider::LlamaCpp {
+        let model_id = &request.model_config.model_id;
+        if let Some(model) = find_model_by_file(model_id).or_else(|| find_model_by_name(model_id)) {
+            let model_path = crate::ai::providers::get_models_dir_public().join(model.model_file);
+            if !model_path.exists() {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<DownloadStatus>(32);
+                let w = window.clone();
+                let mid = model_id.clone();
+                tokio::spawn(async move {
+                    while let Some(status) = rx.recv().await {
+                        let _ = w.emit("llamacpp-download-progress", serde_json::json!({
+                            "modelId": mid,
+                            "status": status.status,
+                            "progress": status.progress,
+                        }));
+                    }
+                });
+                download_gguf_model(model, Some(tx)).await.map_err(|e| e.message)?;
+                let _ = window.emit("llamacpp-download-progress", serde_json::json!({
+                    "modelId": model_id,
+                    "status": "completed",
+                    "progress": 1.0,
+                }));
+            }
+        }
+    }
+
     let result = match request.model_config.provider {
         ModelProvider::Ollama => run_ollama_inference(window, &request, cancel_token.clone())
-            .await
-            .map_err(|e| e.message),
-        ModelProvider::Candle => run_candle_inference(window, &request)
             .await
             .map_err(|e| e.message),
         ModelProvider::OpenAICompatible => run_openai_compatible_inference(&request)
             .await
             .map_err(|e| e.message),
+        ModelProvider::LlamaCpp => run_llamacpp_inference(&request)
+            .await
+            .map_err(|e| e.message),
         ModelProvider::TransformerJS => {
-            // TransformerJS runs in the browser, not in Rust
             Err("TransformerJS inference should run in the browser".to_string())
         }
         _ => Err("Provider not yet implemented".to_string()),
     };
 
-    // Cleanup: remove session from active sessions
     {
         let mut sessions = state.active_sessions.lock().unwrap();
         sessions.remove(&session_id);
@@ -137,8 +153,8 @@ pub async fn check_provider_availability(
             let status = get_ollama_status(endpoint.as_deref()).await;
             Ok(status.is_available)
         }
-        "candle" => {
-            Ok(check_candle_availability().await)
+        "llamacpp" => {
+            Ok(check_llamacpp_availability().await)
         }
         "openai-compatible" => {
             if let Some(ep) = endpoint {
@@ -152,17 +168,82 @@ pub async fn check_provider_availability(
     }
 }
 
-/// Download the embedded model (streaming progress)
+#[derive(Serialize)]
+pub struct LlamaCppRecommendation {
+    pub system_ram_gb: u32,
+    pub recommended_model_file: String,
+    pub recommended_model_name: String,
+    pub recommended_size_gb: f64,
+    pub models_available: Vec<serde_json::Value>,
+}
+
+/// Get system-aware model recommendation for LlamaCpp
 #[command]
-pub async fn download_model(window: tauri::Window, model_id: String) -> Result<(), String> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    
-    // Spawn background task
+pub async fn get_llamacpp_recommendation() -> Result<LlamaCppRecommendation, String> {
+    let ram_gb = get_system_ram_gb();
+    let recommended = recommend_model_for_system();
+    let all_models = crate::ai::providers::get_model_registry_safe()
+        .iter()
+        .map(|m| serde_json::json!({
+            "modelFile": m.model_file,
+            "name": m.display_name,
+            "sizeGb": m.size_bytes as f64 / 1_000_000_000.0,
+            "minRamGb": m.min_ram_gb,
+            "recommendedRamGb": m.recommended_ram_gb,
+            "isDownloaded": std::path::Path::new(
+                &crate::ai::providers::get_models_dir_public().join(m.model_file)
+            ).exists(),
+        }))
+        .collect();
+
+    Ok(LlamaCppRecommendation {
+        system_ram_gb: ram_gb,
+        recommended_model_file: recommended.model_file.to_string(),
+        recommended_model_name: recommended.display_name.to_string(),
+        recommended_size_gb: recommended.size_bytes as f64 / 1_000_000_000.0,
+        models_available: all_models,
+    })
+}
+
+/// Download a LlamaCpp GGUF model
+#[command]
+pub async fn download_llamacpp_model(
+    window: tauri::Window,
+    model_id: String,
+) -> Result<(), String> {
+    let mid = model_id.clone();
+    let model = find_model_by_file(&mid)
+        .or_else(|| find_model_by_name(&mid))
+        .ok_or_else(|| format!("Unknown model: {}", &mid))?;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<DownloadStatus>(32);
+
+    // Spawn the download in a background task
+    let window_clone = window.clone();
+    let mid_for_spawn = model_id.clone();
     tokio::spawn(async move {
         while let Some(status) = rx.recv().await {
-            let _ = window.emit("model-download-progress", status);
+            let payload = serde_json::json!({
+                "modelId": mid_for_spawn,
+                "status": status.status,
+                "progress": status.progress,
+            });
+            let _ = window_clone.emit("llamacpp-download-progress", payload);
         }
     });
 
-    download_embedded_model(model_id, tx).await
+    download_gguf_model(model, Some(tx))
+        .await
+        .map_err(|e| e.message)?;
+
+    let _ = window.emit(
+        "llamacpp-download-progress",
+        serde_json::json!({
+            "modelId": model_id,
+            "status": "completed",
+            "progress": 1.0,
+        }),
+    );
+
+    Ok(())
 }

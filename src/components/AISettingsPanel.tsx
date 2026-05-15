@@ -213,6 +213,7 @@ export function AISettingsPanel({
     // Test inference state
     const [isTesting, setIsTesting] = React.useState<boolean>(false);
     const [testResult, setTestResult] = React.useState<string | null>(null);
+    const [downloadProgressState, setDownloadProgressState] = React.useState<{ progress: number; status: string } | null>(null);
 
     // Safety check - if no config, don't render (but hooks must run first)
     if (!modelConfig) {
@@ -267,7 +268,7 @@ export function AISettingsPanel({
         switch (provider) {
             case ModelProvider.TransformerJS: return <GlobeRegular />;
             case ModelProvider.Ollama: return <BotRegular />;
-            case ModelProvider.Candle: return <BotRegular />; // Use Bot icon for now
+            case ModelProvider.LlamaCpp: return <BotRegular />;
             default: return <CubeRegular />;
         }
     };
@@ -318,6 +319,14 @@ export function AISettingsPanel({
                 },
                 (chunk) => {
                     streamedResponse += chunk;
+                },
+                (progress: any) => {
+                    if (progress?.modelId) {
+                        setDownloadProgressState({ progress: progress.progress, status: progress.status });
+                        if (progress.status === 'completed' || progress.progress >= 1.0) {
+                            setDownloadProgressState(null);
+                        }
+                    }
                 }
             );
 
@@ -419,7 +428,7 @@ export function AISettingsPanel({
                                                     value={
                                                         activeProvider === 'transformerjs' ? 'Transformer.js (In-Browser)' :
                                                             activeProvider === 'ollama' ? 'Ollama (Local Server)' :
-                                                                activeProvider === 'candle' ? 'Embedded AI (Rust/Candle)' :
+                                                                activeProvider === 'llamacpp' ? 'LlamaCpp (Local)' :
                                                                     activeProvider === 'openai-compatible' ? 'OpenAI Compatible' :
                                                                         'Select Provider'
                                                     }
@@ -427,8 +436,8 @@ export function AISettingsPanel({
                                                     onOptionSelect={(_, data) => onProviderChange(data.optionValue as ModelProvider)}
                                                     style={{ width: '100%' }}
                                                 >
-                                                    <Option value="candle" text="Embedded AI (Rust/Candle)">
-                                                        <BotRegular style={{ marginRight: '8px' }} /> Embedded AI (Recommended)
+                                                    <Option value="llamacpp" text="LlamaCpp (Local)">
+                                                        <BotRegular style={{ marginRight: '8px' }} /> LlamaCpp (Recommended)
                                                     </Option>
                                                     <Option value="transformerjs" text="Transformer.js (In-Browser)">
                                                         <GlobeRegular style={{ marginRight: '8px' }} /> Transformer.js (In-Browser)
@@ -576,20 +585,20 @@ export function AISettingsPanel({
                                                                                 onClick={(e) => {
                                                                                     e.stopPropagation();
 
-                                                                                    if (model.provider === ModelProvider.Candle) {
-                                                                                        if (onDownloadModel) {
-                                                                                            onDownloadModel(model.modelId, ModelProvider.Candle);
-                                                                                        }
-                                                                                        return;
-                                                                                    }
+                    if (model.provider === ModelProvider.LlamaCpp) {
+                        if (onDownloadModel) {
+                            onDownloadModel(model.modelId, ModelProvider.LlamaCpp);
+                        }
+                        return;
+                    }
 
-                                                                                    const command = `ollama pull ${model.modelId}`;
+                    const command = `ollama pull ${model.modelId}`;
                                                                                     navigator.clipboard.writeText(command);
                                                                                     alert(`Command copied to clipboard!\n\nRun this in your terminal:\n${command}\n\nThen refresh the app.`);
                                                                                 }}
-                                                                                title={model.provider === ModelProvider.Candle ? "Download Embedded Model" : "Copy install command"}
-                                                                            >
-                                                                                {model.provider === ModelProvider.Candle ? "Download" : "Get"}
+                                                title={model.provider === ModelProvider.LlamaCpp ? "Download GGUF Model" : "Copy install command"}
+                                            >
+                                                {model.provider === ModelProvider.LlamaCpp ? "Download" : "Get"}
                                                                             </Button>
                                                                         </div>
                                                                     )}
@@ -722,7 +731,33 @@ export function AISettingsPanel({
                         </div>
                     </DialogContent>
 
-                    {testResult && (
+                    {downloadProgressState && (
+                        <div style={{
+                            padding: '12px 24px',
+                            backgroundColor: tokens.colorNeutralBackground2,
+                            borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
+                            borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                        }}>
+                            <Text size={200}>Downloading model... {Math.round(downloadProgressState.progress * 100)}%</Text>
+                            <div style={{
+                                height: '4px',
+                                backgroundColor: tokens.colorNeutralStroke1,
+                                borderRadius: '2px',
+                                overflow: 'hidden',
+                            }}>
+                                <div style={{
+                                    height: '100%',
+                                    width: `${downloadProgressState.progress * 100}%`,
+                                    backgroundColor: tokens.colorBrandStroke1,
+                                    transition: 'width 0.3s ease',
+                                }} />
+                            </div>
+                        </div>
+                    )}
+                    {testResult && !downloadProgressState && (
                         <div style={{
                             padding: '12px 24px',
                             backgroundColor: testResult.startsWith('Error')

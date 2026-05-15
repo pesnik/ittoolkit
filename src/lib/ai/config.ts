@@ -16,17 +16,18 @@ export interface AIConfig {
         qa: {
             ollama: string;
             openai: string;
-            candle: string;
+            llamacpp: string;
         };
         agent: {
             ollama: string;
             openai: string;
-            candle: string;
+            llamacpp: string;
         };
     };
     endpoints: {
         ollama: string;
         openaiCompatible: string;
+        llamacpp: string;
     };
     parameters: {
         temperature: number;
@@ -48,26 +49,27 @@ export interface AIConfig {
 export function loadAIConfig(): AIConfig {
     return {
         defaultProvider: {
-            qa: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_QA as ModelProvider) || ModelProvider.Candle,
-            agent: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_AGENT as ModelProvider) || ModelProvider.Ollama,
+            qa: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_QA as ModelProvider) || ModelProvider.LlamaCpp,
+            agent: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_AGENT as ModelProvider) || ModelProvider.LlamaCpp,
         },
 
         defaultModels: {
             qa: {
                 ollama: process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL_QA || 'llama3.2:1B',
                 openai: process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL_QA || 'openai-compatible-generic',
-                candle: process.env.NEXT_PUBLIC_DEFAULT_CANDLE_MODEL_QA || 'embedded-qwen1.5',
+                llamacpp: process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL_QA || 'qwen2.5-coder-0.5b-q8_0.gguf',
             },
             agent: {
                 ollama: process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL_AGENT || 'qwen2.5-coder:7b',
                 openai: process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL_AGENT || 'openai-compatible-generic',
-                candle: process.env.NEXT_PUBLIC_DEFAULT_CANDLE_MODEL_AGENT || 'embedded-qwen1.5',
+                llamacpp: process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL_AGENT || 'qwen2.5-coder-0.5b-q8_0.gguf',
             },
         },
 
         endpoints: {
             ollama: process.env.NEXT_PUBLIC_OLLAMA_ENDPOINT || 'http://127.0.0.1:11434',
             openaiCompatible: process.env.NEXT_PUBLIC_OPENAI_COMPATIBLE_ENDPOINT || 'http://127.0.0.1:8033',
+            llamacpp: process.env.NEXT_PUBLIC_LLAMACPP_ENDPOINT || 'http://127.0.0.1:8081',
         },
 
         parameters: {
@@ -105,6 +107,8 @@ export function getDefaultEndpoint(provider: ModelProvider, config?: AIConfig): 
             return cfg.endpoints.ollama;
         case ModelProvider.OpenAICompatible:
             return cfg.endpoints.openaiCompatible;
+        case ModelProvider.LlamaCpp:
+            return cfg.endpoints.llamacpp;
         default:
             return undefined;
     }
@@ -122,8 +126,8 @@ export function getDefaultModelId(provider: ModelProvider, mode: AIMode = AIMode
             return cfg.defaultModels[modeKey].ollama;
         case ModelProvider.OpenAICompatible:
             return cfg.defaultModels[modeKey].openai;
-        case ModelProvider.Candle:
-            return cfg.defaultModels[modeKey].candle;
+        case ModelProvider.LlamaCpp:
+            return cfg.defaultModels[modeKey].llamacpp;
         default:
             return '';
     }
