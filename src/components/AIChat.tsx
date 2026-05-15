@@ -69,6 +69,7 @@ const useStyles = makeStyles({
     },
     messageContent: {
         maxWidth: '70%',
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
     },
@@ -118,6 +119,26 @@ const useStyles = makeStyles({
             margin: '8px 0',
             paddingLeft: '12px',
             color: tokens.colorNeutralForeground2,
+        },
+        '& table': {
+            borderCollapse: 'collapse',
+            width: '100%',
+            marginTop: '8px',
+            marginBottom: '8px',
+            fontSize: '13px',
+            display: 'block',
+            overflowX: 'auto',
+            maxWidth: '100%',
+        },
+        '& th, & td': {
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            padding: '6px 10px',
+            textAlign: 'left',
+            whiteSpace: 'nowrap',
+        },
+        '& th': {
+            backgroundColor: tokens.colorNeutralBackground2,
+            fontWeight: 600,
         },
     },
     userBubble: {
