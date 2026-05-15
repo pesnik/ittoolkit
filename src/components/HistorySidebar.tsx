@@ -18,7 +18,6 @@ import {
     Add24Regular,
     Delete16Regular,
     PanelLeftContract24Regular,
-    PanelLeftExpand24Regular,
 } from '@fluentui/react-icons';
 import { listConversations, deleteConversation } from '@/lib/conversations/store';
 import { ConversationSummary } from '@/types/ai-types';
@@ -28,13 +27,12 @@ const useStyles = makeStyles({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        width: '260px',
+        flexShrink: 0,
         backgroundColor: tokens.colorNeutralBackground2,
         ...shorthands.borderRight('1px', 'solid', tokens.colorNeutralStroke1),
-        transition: 'width 160ms ease',
         overflow: 'hidden',
     },
-    sidebarOpen: { width: '260px' },
-    sidebarCollapsed: { width: '40px' },
     header: {
         display: 'flex',
         alignItems: 'center',
@@ -93,6 +91,8 @@ const useStyles = makeStyles({
 });
 
 interface HistorySidebarProps {
+    visible: boolean;
+    onClose: () => void;
     activeConversationId: string | null;
     onSelect: (id: string) => void;
     onNew: () => void;
@@ -115,15 +115,14 @@ function formatRelative(iso: string): string {
 }
 
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
+    visible,
+    onClose,
     activeConversationId,
     onSelect,
     onNew,
     refreshKey = 0,
 }) => {
     const styles = useStyles();
-    // Default to collapsed so the chat surface gets the full panel width; the
-    // user expands it when they want to browse past conversations.
-    const [collapsed, setCollapsed] = useState(true);
     const [items, setItems] = useState<ConversationSummary[]>([]);
     const [loading, setLoading] = useState(false);
     const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
@@ -141,8 +140,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
     }, []);
 
     useEffect(() => {
-        void reload();
-    }, [reload, refreshKey]);
+        if (visible) void reload();
+    }, [reload, refreshKey, visible]);
 
     const handleDeleteClick = useCallback(
         (e: React.MouseEvent, item: ConversationSummary) => {
@@ -168,23 +167,10 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
         }
     }, [pendingDelete, activeConversationId, onNew, reload]);
 
-    if (collapsed) {
-        return (
-            <div className={`${styles.sidebar} ${styles.sidebarCollapsed}`}>
-                <div className={styles.header}>
-                    <Button
-                        appearance="subtle"
-                        icon={<PanelLeftExpand24Regular />}
-                        onClick={() => setCollapsed(false)}
-                        aria-label="Expand history sidebar"
-                    />
-                </div>
-            </div>
-        );
-    }
+    if (!visible) return null;
 
     return (
-        <div className={`${styles.sidebar} ${styles.sidebarOpen}`}>
+        <div className={styles.sidebar}>
             <div className={styles.header}>
                 <Button
                     appearance="primary"
@@ -197,8 +183,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                 <Button
                     appearance="subtle"
                     icon={<PanelLeftContract24Regular />}
-                    onClick={() => setCollapsed(true)}
-                    aria-label="Collapse history sidebar"
+                    onClick={onClose}
+                    aria-label="Hide history sidebar"
                 />
             </div>
             <div className={styles.list}>

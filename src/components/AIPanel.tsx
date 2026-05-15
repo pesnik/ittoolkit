@@ -18,6 +18,7 @@ import {
 import { AISettingsPanel } from './AISettingsPanel';
 import {
     Settings24Regular,
+    PanelLeftExpand24Regular,
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -169,6 +170,7 @@ export const AIPanel = ({
     // Persistence + skills
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+    const [historyVisible, setHistoryVisible] = useState(false);
     const [skills, setSkills] = useState<SkillManifest[]>([]);
     const skillsRef = useRef<SkillManifest[]>([]);
     skillsRef.current = skills;
@@ -844,6 +846,8 @@ export const AIPanel = ({
     return (
         <div className={styles.container}>
             <HistorySidebar
+                visible={historyVisible}
+                onClose={() => setHistoryVisible(false)}
                 activeConversationId={activeConversationId}
                 onSelect={handleSelectConversation}
                 onNew={handleNewChat}
@@ -852,6 +856,16 @@ export const AIPanel = ({
             <div className={styles.mainColumn}>
             <div className={styles.header}>
                 <div className={styles.headerLeft}>
+                    {!historyVisible && (
+                        <Button
+                            appearance="subtle"
+                            icon={<PanelLeftExpand24Regular />}
+                            size="small"
+                            title="Show conversation history"
+                            aria-label="Show conversation history"
+                            onClick={() => setHistoryVisible(true)}
+                        />
+                    )}
                     <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
                         <Text weight="semibold" size={300}>RoRo</Text>
                         <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>
