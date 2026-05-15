@@ -169,6 +169,15 @@ export const AIPanel = ({
 
     // Persistence + skills
     const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+    // Mirror of activeConversationId for use inside async callbacks. persistMessage
+    // is called twice per turn (user msg, then assistant msg after inference); both
+    // calls live inside the same handleSendMessage closure, so without a ref the
+    // assistant call would see a stale `null` and create a second conversation file.
+    const activeConversationIdRef = useRef<string | null>(null);
+    const setActiveConversation = useCallback((id: string | null) => {
+        activeConversationIdRef.current = id;
+        setActiveConversationId(id);
+    }, []);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
     const [historyVisible, setHistoryVisible] = useState(false);
     const [skills, setSkills] = useState<SkillManifest[]>([]);
@@ -424,25 +433,26 @@ export const AIPanel = ({
     }, [showSettings, refreshSkills]);
 
     const handleNewChat = useCallback(() => {
-        setActiveConversationId(null);
+        setActiveConversation(null);
         setMessages([]);
-    }, []);
+    }, [setActiveConversation]);
 
     const handleSelectConversation = useCallback(async (id: string) => {
         try {
             const conv = await loadConversation(id);
-            setActiveConversationId(conv.id);
+            setActiveConversation(conv.id);
             setMessages(conv.messages.map(fromStoredMessage));
         } catch (e) {
             console.error('[AIPanel] Failed to load conversation:', e);
         }
-    }, []);
+    }, [setActiveConversation]);
 
     const persistMessage = useCallback(
         async (msg: ChatMessage, modelLabel?: string, providerLabel?: string, modeLabel?: string) => {
             try {
-                if (activeConversationId) {
-                    await persistAppendMessage(activeConversationId, msg);
+                const currentId = activeConversationIdRef.current;
+                if (currentId) {
+                    await persistAppendMessage(currentId, msg);
                     setHistoryRefreshKey((k) => k + 1);
                 } else {
                     const conv = await createConversation(msg, {
@@ -450,14 +460,14 @@ export const AIPanel = ({
                         provider: providerLabel,
                         mode: modeLabel,
                     });
-                    setActiveConversationId(conv.id);
+                    setActiveConversation(conv.id);
                     setHistoryRefreshKey((k) => k + 1);
                 }
             } catch (e) {
                 console.warn('[AIPanel] Persist failed:', e);
             }
         },
-        [activeConversationId]
+        [setActiveConversation]
     );
 
     const handleStopGeneration = async () => {
