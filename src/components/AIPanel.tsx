@@ -30,6 +30,7 @@ import {
     ModelConfig,
     FileSystemContext,
     ModelProvider,
+    ToolExecutionData,
 } from '@/types/ai-types';
 import {
     getProvidersStatus,
@@ -395,6 +396,8 @@ export const AIPanel = ({
 
         let downloadMsgId = '';
 
+        const toolExecutions: ToolExecutionData[] = [];
+
         try {
             const selectedModel = availableModels.find((m) => m.id === selectedModelId);
 
@@ -550,26 +553,26 @@ export const AIPanel = ({
                     } : undefined,
                     onToolExecution: (event) => {
                         if (event.result || event.error) {
-                            // Tool completed
-                            if (event.error) {
-                                console.error(`[AIPanel] ❌ Tool ${event.toolName} failed:`, event.error);
-                            } else {
-                                console.log(`[AIPanel] ✅ Tool ${event.toolName} completed in ${event.executionTimeMs}ms`);
-                                console.log(`[AIPanel]    Result length:`, event.result?.length);
-                                console.log(`[AIPanel]    Result preview:`, event.result?.substring(0, 100));
-
-                                // Log full result for debugging (useful when inspecting tool responses)
-                                if (event.result && event.result.length < 1000) {
-                                    console.log(`[AIPanel]    Full result:`, event.result);
-                                } else if (event.result) {
-                                    console.log(`[AIPanel]    Full result (first 1000 chars):`, event.result.substring(0, 1000) + '...');
-                                }
+                            const existing = toolExecutions.find(e => e.toolName === event.toolName);
+                            if (existing) {
+                                existing.status = event.error ? 'error' as const : 'success' as const;
+                                existing.result = event.result;
+                                existing.error = event.error;
+                                existing.executionTimeMs = event.executionTimeMs;
                             }
                         } else {
-                            // Tool started
-                            console.log(`[AIPanel] 🔧 Starting tool: ${event.toolName}`);
-                            console.log(`[AIPanel]    Arguments:`, JSON.stringify(event.arguments, null, 2));
+                            toolExecutions.push({
+                                toolName: event.toolName,
+                                arguments: event.arguments as Record<string, unknown>,
+                                status: 'executing',
+                            });
                         }
+
+                        setMessages((prev) => prev.map(msg =>
+                            msg.id === assistantMsgId
+                                ? { ...msg, toolExecutions: [...toolExecutions], isStreaming: true }
+                                : msg
+                        ));
                     },
                     onProgress,
                 })

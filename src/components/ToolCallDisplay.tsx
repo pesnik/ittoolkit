@@ -114,7 +114,7 @@ interface ToolCallDisplayProps {
 
 export function ToolCallDisplay({ execution }: ToolCallDisplayProps) {
     const styles = useStyles();
-    const [isExpanded, setIsExpanded] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true);
 
     const getStatusIcon = () => {
         switch (execution.status) {

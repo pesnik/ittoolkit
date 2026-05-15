@@ -48,9 +48,19 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
         if (content) content += '\n';
         content += result.stderr;
     }
-    if (!content) content = '(no output)';
 
     const isError = result.exit_code !== 0 || result.timed_out;
+
+    if (!content) {
+        if (result.timed_out) {
+            content = `Command timed out (exit code ${result.exit_code})`;
+        } else if (result.exit_code !== 0) {
+            content = `Command failed with exit code ${result.exit_code}`;
+        } else {
+            content = '(no output)';
+        }
+    }
+
     return { content, isError };
 }
 
