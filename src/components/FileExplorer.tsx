@@ -707,7 +707,7 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                 ) : (
                     <>
                         {/* Grid */}
-                        <div className={styles.gridContainer} style={{ flexGrow: 1, width: showChart ? '60%' : '100%' }}>
+                        <div className={styles.gridContainer} style={{ flexGrow: 1, width: showChart ? '50%' : '100%' }}>
                             <DataGrid
                                 items={items}
                                 columns={columns}
@@ -893,8 +893,8 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
 
                         {/* Chart Panel */}
                         {showChart && items.length > 0 && (
-                            <div style={{ width: '40%', minWidth: '300px', display: 'flex', flexDirection: 'column' }}>
-                                <DiskUsageChart items={items} />
+                            <div style={{ width: '50%', minWidth: '300px', display: 'flex', flexDirection: 'column' }}>
+                                <DiskUsageChart items={items} onNavigate={handleNavigate} />
                             </div>
                         )}
                     </>
