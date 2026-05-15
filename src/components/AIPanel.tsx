@@ -16,6 +16,7 @@ import {
     Spinner,
 } from '@fluentui/react-components';
 import { AISettingsPanel } from './AISettingsPanel';
+import { ModelSelector } from './ModelSelector';
 import {
     Settings24Regular,
     PanelLeftExpand24Regular,
@@ -31,9 +32,18 @@ import {
     ModelConfig,
     FileSystemContext,
     ModelProvider,
+    SavedOpenAIProvider,
     SkillManifest,
     ToolExecutionData,
 } from '@/types/ai-types';
+import {
+    listSavedProviders,
+    getActiveProvider,
+    getActiveProviderId,
+    setActiveProviderId,
+    migrateLegacySingleConfig,
+} from '@/lib/ai/savedProviders';
+import { featureFlags } from '@/lib/featureFlags';
 import {
     getProvidersStatus,
     runInference,
@@ -191,6 +201,13 @@ export const AIPanel = ({
     // Active provider - determines which models are shown in ModelSelector
     const [activeProvider, setActiveProvider] = useState<ModelProvider | undefined>();
 
+    // Saved OpenAI-compatible presets. `presetsVersion` is bumped after any mutation
+    // (settings dialog, header picker) so this component re-reads from storage.
+    const [presetsVersion, setPresetsVersion] = useState<number>(0);
+    void presetsVersion;
+    const savedPresets: SavedOpenAIProvider[] = listSavedProviders();
+    const [activePresetId, setActivePresetIdState] = useState<string | null>(null);
+
     // Download state
     const [downloadProgress, setDownloadProgress] = useState<{ status: string; progress: number; modelId: string } | undefined>(undefined);
 
@@ -238,6 +255,9 @@ export const AIPanel = ({
     useEffect(() => {
         async function initialize() {
             try {
+                // Lift any legacy single-config localStorage into a "Default" preset.
+                migrateLegacySingleConfig();
+
                 // Load config first
                 const config = loadAIConfig();
 
@@ -264,18 +284,23 @@ export const AIPanel = ({
 
                 const defaultProvider = savedProvider || config.defaultProvider;
 
-                // Get the correct endpoint based on the provider (use provider-specific keys)
+                // For OpenAI-compatible: prefer the active preset over flat-key fallback.
+                const activePreset = defaultProvider === ModelProvider.OpenAICompatible
+                    ? getActiveProvider()
+                    : undefined;
+                setActivePresetIdState(getActiveProviderId());
+
                 const endpointKey = defaultProvider === ModelProvider.OpenAICompatible
                     ? 'defaultAIEndpoint_openaiCompatible'
                     : 'defaultAIEndpoint_ollama';
                 const savedEndpoint = localStorage.getItem(endpointKey);
-                const defaultEndpoint = savedEndpoint || (
+                const defaultEndpoint = activePreset?.endpoint || savedEndpoint || (
                     defaultProvider === ModelProvider.OpenAICompatible
                         ? config.endpoints.openaiCompatible
                         : config.endpoints.ollama
                 );
 
-                const configuredOpenAIModelId = config.defaultModels.openai;
+                const configuredOpenAIModelId = activePreset?.modelName || config.defaultModels.openai;
                 const defaultModelId = savedModelId || (defaultProvider === ModelProvider.OpenAICompatible ? configuredOpenAIModelId : null);
 
                 // If we're using OpenAI-compatible provider, create the model
@@ -284,7 +309,9 @@ export const AIPanel = ({
                     if (!allModels.find(m => m.id === configuredOpenAIModelId)) {
                         const genericModel: ModelConfig = {
                             id: configuredOpenAIModelId,
-                            name: `OpenAI Compatible (${configuredOpenAIModelId})`,
+                            name: activePreset?.name
+                                ? `${activePreset.name} (${configuredOpenAIModelId})`
+                                : `OpenAI Compatible (${configuredOpenAIModelId})`,
                             provider: ModelProvider.OpenAICompatible,
                             modelId: configuredOpenAIModelId,
                             parameters: {
@@ -294,6 +321,7 @@ export const AIPanel = ({
                                 stream: true
                             },
                             endpoint: defaultEndpoint,
+                            apiKey: activePreset?.apiKey,
                             isAvailable: true,
                             recommendedFor: [AIMode.Agent],
                             sizeBytes: 0
@@ -409,6 +437,40 @@ export const AIPanel = ({
             if (anyModelOfProvider) {
                 setSelectedModelId(anyModelOfProvider.id);
             }
+        }
+    };
+
+    const handlePresetChange = (presetId: string) => {
+        setActiveProviderId(presetId);
+        setActivePresetIdState(presetId);
+        setPresetsVersion((v) => v + 1);
+
+        // Mirror the preset's model name into the selected synthetic OpenAI-compatible
+        // ModelConfig so inference picks it up immediately.
+        const preset = listSavedProviders().find((p) => p.id === presetId);
+        if (preset) {
+            setAvailableModels((prev) => {
+                const others = prev.filter((m) => m.provider !== ModelProvider.OpenAICompatible);
+                const synthetic: ModelConfig = {
+                    id: preset.modelName,
+                    name: `${preset.name} (${preset.modelName})`,
+                    provider: ModelProvider.OpenAICompatible,
+                    modelId: preset.modelName,
+                    parameters: {
+                        temperature: aiConfig.parameters.temperature,
+                        topP: aiConfig.parameters.topP,
+                        maxTokens: aiConfig.parameters.maxTokens,
+                        stream: true,
+                    },
+                    endpoint: preset.endpoint,
+                    apiKey: preset.apiKey,
+                    isAvailable: true,
+                    recommendedFor: [AIMode.Agent],
+                    sizeBytes: 0,
+                };
+                return [...others, synthetic];
+            });
+            setSelectedModelId(preset.modelName);
         }
     };
 
@@ -593,27 +655,27 @@ export const AIPanel = ({
             setMessages((prev) => [...prev, thinkingMessage]);
 
             // Add endpoint for OpenAI-compatible and Ollama providers
-            // Priority: 1) localStorage (user custom endpoint), 2) model config (from runtime config/backend), 3) runtime config fallback
+            // OpenAI-compatible reads from the active preset; Ollama still reads its flat key.
             let endpointToUse: string | undefined;
             let customModelName: string | undefined;
             let apiKey: string | undefined;
-            if (activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama) {
-                // CRITICAL FIX: Use activeProvider (current state) instead of selectedModel.provider (can be stale)
-                // This prevents race conditions when user switches providers and immediately sends a message
-                const endpointKey = activeProvider === ModelProvider.OpenAICompatible
-                    ? 'defaultAIEndpoint_openaiCompatible'
-                    : 'defaultAIEndpoint_ollama';
-                endpointToUse = localStorage.getItem(endpointKey) ||
-                    selectedModel?.endpoint ||
-                    await getDefaultEndpoint(activeProvider);
+            if (activeProvider === ModelProvider.OpenAICompatible) {
+                const preset = getActiveProvider();
+                endpointToUse = preset?.endpoint
+                    || localStorage.getItem('defaultAIEndpoint_openaiCompatible')
+                    || selectedModel?.endpoint
+                    || await getDefaultEndpoint(activeProvider);
+                customModelName = preset?.modelName
+                    || localStorage.getItem('customModelName_openaiCompatible')
+                    || undefined;
+                apiKey = preset?.apiKey
+                    || localStorage.getItem('defaultAIKey_openaiCompatible')
+                    || undefined;
+            } else if (activeProvider === ModelProvider.Ollama) {
+                endpointToUse = localStorage.getItem('defaultAIEndpoint_ollama')
+                    || selectedModel?.endpoint
+                    || await getDefaultEndpoint(activeProvider);
 
-                // Load custom model name and API key for OpenAI-compatible
-                if (activeProvider === ModelProvider.OpenAICompatible) {
-                    customModelName = localStorage.getItem('customModelName_openaiCompatible') || undefined;
-                    apiKey = localStorage.getItem('defaultAIKey_openaiCompatible') || undefined;
-                }
-
-                // Validation: Warn if model provider doesn't match active provider (indicates state sync issue)
                 if (selectedModel && selectedModel.provider !== activeProvider) {
                     console.warn(`[AIPanel] Provider mismatch detected! selectedModel.provider=${selectedModel.provider}, activeProvider=${activeProvider}. Using activeProvider for endpoint resolution.`);
                 }
@@ -884,6 +946,17 @@ export const AIPanel = ({
                     </div>
                 </div>
                 <div className={styles.headerRight}>
+                    {featureFlags.headerPresetPicker && activeProvider === ModelProvider.OpenAICompatible && (
+                        <ModelSelector
+                            models={filteredModels}
+                            selectedModelId={selectedModelId}
+                            onModelChange={(modelId) => setSelectedModelId(modelId)}
+                            activeProvider={activeProvider}
+                            savedPresets={savedPresets}
+                            activePresetId={activePresetId}
+                            onPresetChange={handlePresetChange}
+                        />
+                    )}
                     <Button
                         appearance="subtle"
                         icon={<Settings24Regular />}
@@ -965,7 +1038,13 @@ export const AIPanel = ({
                     onUpdateConfig={handleUpdateConfig}
                     onSelectModel={setSelectedModelId}
                     onProviderChange={handleProviderChange}
-                    onClose={() => setShowSettings(false)}
+                    onClose={() => {
+                        setShowSettings(false);
+                        // Settings dialog may have mutated presets — re-read so the header
+                        // ModelSelector reflects the latest list and active id.
+                        setActivePresetIdState(getActiveProviderId());
+                        setPresetsVersion((v) => v + 1);
+                    }}
                     open={showSettings}
                     downloadProgress={downloadProgress}
                     onDownloadModel={handleDownloadModel}

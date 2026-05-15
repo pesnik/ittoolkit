@@ -440,3 +440,20 @@ export interface SkillManifest {
     enabled: boolean;
     trusted: boolean;
 }
+
+/**
+ * A saved OpenAI-compatible provider preset.
+ * Bundles the endpoint, API key, and model name the user wants to reuse
+ * so they can switch profiles (e.g., OpenRouter vs. local llama.cpp)
+ * without retyping credentials.
+ */
+export interface SavedOpenAIProvider {
+    id: string;
+    name: string;
+    endpoint: string;
+    apiKey: string;
+    modelName: string;
+    isDefault: boolean;
+    createdAt: number;
+    updatedAt: number;
+}

@@ -61,7 +61,7 @@ export function loadAIConfig(): AIConfig {
 
         endpoints: {
             ollama: process.env.NEXT_PUBLIC_OLLAMA_ENDPOINT || 'http://127.0.0.1:11434',
-            openaiCompatible: process.env.NEXT_PUBLIC_OPENAI_COMPATIBLE_ENDPOINT || 'http://127.0.0.1:8033',
+            openaiCompatible: process.env.NEXT_PUBLIC_OPENAI_COMPATIBLE_ENDPOINT || 'http://127.0.0.1:8033/v1',
             llamacpp: process.env.NEXT_PUBLIC_LLAMACPP_ENDPOINT || 'http://127.0.0.1:8081',
         },
 

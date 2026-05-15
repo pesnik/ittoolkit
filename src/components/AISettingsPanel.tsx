@@ -39,10 +39,16 @@ import {
     ArrowDownload24Regular,
     DismissRegular,
 } from '@fluentui/react-icons';
-import { ModelConfig, ModelParameters, ModelProvider, AIMode, MessageRole } from '@/types/ai-types';
+import { ModelConfig, ModelParameters, ModelProvider, AIMode, MessageRole, SavedOpenAIProvider } from '@/types/ai-types';
 import { runInference, createMessage } from '@/lib/ai/ai-service';
 import { loadAIConfig } from '@/lib/ai/config';
 import { SkillsPanel } from './SkillsPanel';
+import { SavedProvidersPanel } from './SavedProvidersPanel';
+import {
+    listSavedProviders,
+    getActiveProvider,
+    setActiveProviderId,
+} from '@/lib/ai/savedProviders';
 
 const useStyles = makeStyles({
     dialogSurface: {
@@ -176,34 +182,43 @@ export function AISettingsPanel({
     const [customModelName, setCustomModelName] = React.useState<string>('');
     const [apiKey, setApiKey] = React.useState<string>('');
 
-    // Load config on mount to get the correct default endpoints
+    // Saved OpenAI-compatible presets. `presetsVersion` is bumped whenever the
+    // SavedProvidersPanel mutates the list so this component re-reads localStorage.
+    const [presetsVersion, setPresetsVersion] = React.useState<number>(0);
+    void presetsVersion;
+    const savedPresets: SavedOpenAIProvider[] = listSavedProviders();
+    const activePreset: SavedOpenAIProvider | undefined =
+        activeProvider === ModelProvider.OpenAICompatible ? getActiveProvider() : undefined;
+
+    // Whether the SavedProvidersPanel is mid-edit. When true, hide the global Test
+    // Inference + Default + Save buttons because the in-form Test connection / Save
+    // preset / Cancel buttons are the right affordances.
+    const [providersEditing, setProvidersEditing] = React.useState<boolean>(false);
+
+    // Load config on mount to get the correct default endpoints.
+    // For OpenAI-compatible we now read from the active preset; for Ollama we keep
+    // the legacy flat-key flow.
     React.useEffect(() => {
         const config = loadAIConfig();
-        // Check for saved custom endpoint first, fall back to config defaults
-        // Use provider-specific keys so Ollama and OpenAI-compatible can have different endpoints
-        const endpointKey = activeProvider === ModelProvider.OpenAICompatible
-            ? 'defaultAIEndpoint_openaiCompatible'
-            : 'defaultAIEndpoint_ollama';
-        const savedEndpoint = localStorage.getItem(endpointKey);
-        const defaultEndpoint = savedEndpoint || (
-            activeProvider === ModelProvider.OpenAICompatible
-                ? config.endpoints.openaiCompatible
-                : config.endpoints.ollama
-        );
-        setCustomEndpoint(defaultEndpoint);
 
-        // Load custom model name for OpenAI-compatible provider
         if (activeProvider === ModelProvider.OpenAICompatible) {
-            const savedModelName = localStorage.getItem('customModelName_openaiCompatible');
-            if (savedModelName) {
-                setCustomModelName(savedModelName);
+            const preset = getActiveProvider();
+            if (preset) {
+                setCustomEndpoint(preset.endpoint);
+                setApiKey(preset.apiKey);
+                setCustomModelName(preset.modelName);
+            } else {
+                // No presets yet — fall back to config defaults so Test Inference still has something to send.
+                setCustomEndpoint(config.endpoints.openaiCompatible);
+                setApiKey('');
+                setCustomModelName(localStorage.getItem('customModelName_openaiCompatible') || '');
             }
-            const savedApiKey = localStorage.getItem('defaultAIKey_openaiCompatible');
-            if (savedApiKey) {
-                setApiKey(savedApiKey);
-            }
+            return;
         }
-    }, [activeProvider]);
+
+        const savedEndpoint = localStorage.getItem('defaultAIEndpoint_ollama');
+        setCustomEndpoint(savedEndpoint || config.endpoints.ollama);
+    }, [activeProvider, presetsVersion]);
 
     // Track if current config is set as default for the current mode
     const [isDefault, setIsDefault] = React.useState<boolean>(() => {
@@ -498,6 +513,7 @@ export function AISettingsPanel({
                             <Tab value="general">General</Tab>
                             <Tab value="parameters">Parameters</Tab>
                             <Tab value="skills">Skills</Tab>
+                            <Tab value="providers">Providers</Tab>
                             <Tab value="advanced">Advanced</Tab>
                         </TabList>
                     </div>
@@ -544,38 +560,77 @@ export function AISettingsPanel({
                                                 </Dropdown>
                                             </div>
 
-                                            {/* Endpoint Configuration */}
-                                            {(activeProvider === 'ollama' || activeProvider === 'openai-compatible') && (
+                                            {/* Endpoint Configuration — Ollama still edits inline; OpenAI-compatible uses presets */}
+                                            {activeProvider === 'ollama' && (
                                                 <div style={{ marginTop: '12px' }}>
                                                     <Label size="small">Endpoint URL</Label>
                                                     <Input
                                                         value={customEndpoint}
                                                         onChange={(e) => setCustomEndpoint(e.target.value)}
-                                                        placeholder={activeProvider === 'ollama' ? "http://127.0.0.1:11434" : "http://127.0.0.1:8080/v1"}
+                                                        placeholder="http://127.0.0.1:11434"
                                                         style={{ width: '100%', marginTop: '4px' }}
                                                     />
                                                     <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                                                        {activeProvider === 'ollama'
-                                                            ? 'Base URL for Ollama server (e.g., http://127.0.0.1:11434)'
-                                                            : 'OpenAI-compatible base URL ending with /v1 (e.g., http://127.0.0.1:8033/v1)'}
+                                                        Base URL for Ollama server (e.g., http://127.0.0.1:11434)
                                                     </Text>
                                                 </div>
                                             )}
 
-                                            {/* API Key for OpenAI-compatible */}
+                                            {/* OpenAI-compatible: pick a saved preset */}
                                             {activeProvider === 'openai-compatible' && (
                                                 <div style={{ marginTop: '12px' }}>
-                                                    <Label size="small">API Key</Label>
-                                                    <Input
-                                                        type="password"
-                                                        value={apiKey}
-                                                        onChange={(e) => setApiKey(e.target.value)}
-                                                        placeholder="sk-or-v1-..."
-                                                        style={{ width: '100%', marginTop: '4px' }}
-                                                    />
-                                                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                                                        Required by some providers (OpenRouter, etc.). Leave blank if not needed.
-                                                    </Text>
+                                                    <Label size="small">Active preset</Label>
+                                                    {savedPresets.length === 0 ? (
+                                                        <div style={{
+                                                            marginTop: '8px',
+                                                            padding: '12px',
+                                                            backgroundColor: tokens.colorNeutralBackground2,
+                                                            borderRadius: '8px',
+                                                        }}>
+                                                            <Text size={200} block style={{ marginBottom: '8px' }}>
+                                                                No saved presets yet. Create one to store endpoint, API key, and model name together.
+                                                            </Text>
+                                                            <Button
+                                                                appearance="primary"
+                                                                size="small"
+                                                                onClick={() => setSelectedTab('providers')}
+                                                            >
+                                                                Create your first preset →
+                                                            </Button>
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <Dropdown
+                                                                value={activePreset?.name ?? 'Select a preset'}
+                                                                selectedOptions={activePreset ? [activePreset.id] : []}
+                                                                onOptionSelect={(_, data) => {
+                                                                    if (data.optionValue) {
+                                                                        setActiveProviderId(data.optionValue);
+                                                                        setPresetsVersion((v) => v + 1);
+                                                                    }
+                                                                }}
+                                                                style={{ width: '100%', marginTop: '4px' }}
+                                                            >
+                                                                {savedPresets.map((p) => (
+                                                                    <Option key={p.id} value={p.id} text={p.name}>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                            <Text weight="semibold">{p.name}</Text>
+                                                                            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                                                                {p.modelName}
+                                                                            </Text>
+                                                                        </div>
+                                                                    </Option>
+                                                                ))}
+                                                            </Dropdown>
+                                                            <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '4px', display: 'block' }}>
+                                                                Manage presets in the <a
+                                                                    href="#"
+                                                                    onClick={(e) => { e.preventDefault(); setSelectedTab('providers'); }}
+                                                                    style={{ color: tokens.colorBrandForeground1 }}
+                                                                >Providers tab</a>.
+                                                            </Text>
+                                                        </>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -586,41 +641,25 @@ export function AISettingsPanel({
                                             </Label>
                                             {activeProvider === ModelProvider.OpenAICompatible ? (
                                                 <div>
-                                                    <div style={{ marginTop: '8px', padding: '16px', backgroundColor: tokens.colorNeutralBackground2, borderRadius: '8px' }}>
-                                                        <Label size="small">Model Name</Label>
-                                                        <Input
-                                                            value={customModelName}
-                                                            onChange={(e) => setCustomModelName(e.target.value)}
-                                                            placeholder="Enter model name (e.g., gpt-4o, claude-sonnet-4, openai/gpt-4o)"
-                                                            style={{ width: '100%', marginTop: '4px' }}
-                                                        />
-                                                        <Text block size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '8px' }}>
-                                                            This name will be sent as the model identifier to the OpenAI-compatible server
-                                                        </Text>
-                                                    </div>
-                                                    <div style={{ padding: '20px', color: tokens.colorNeutralForeground3, marginTop: '16px' }}>
-                                                        <Text block style={{ marginBottom: '12px', fontWeight: 600 }}>
-                                                            Setup Instructions
-                                                        </Text>
-                                                        <Text block size={200} style={{ marginBottom: '8px' }}>
-                                                            1. Set your base URL above (must end with <code>/v1</code>)
-                                                        </Text>
-                                                        <Text block size={200} style={{ marginBottom: '8px', marginLeft: '16px', color: tokens.colorNeutralForeground4 }}>
-                                                            Example: <code>https://openrouter.ai/api/v1</code>
-                                                        </Text>
-                                                        <Text block size={200} style={{ marginBottom: '12px' }}>
-                                                            2. Enter your API key if required (e.g., OpenRouter, OpenAI)
-                                                        </Text>
-                                                        <Text block size={200} style={{ marginBottom: '8px', marginLeft: '16px', color: tokens.colorNeutralForeground4 }}>
-                                                            Example: <code>sk-or-v1-...</code>
-                                                        </Text>
-                                                        <Text block size={200} style={{ marginBottom: '12px' }}>
-                                                            3. Type the model name above (e.g., <code>openai/gpt-4o</code>)
-                                                        </Text>
-                                                        <Text block size={200}>
-                                                            4. Use the &quot;Test Inference&quot; button below to verify the connection
-                                                        </Text>
-                                                    </div>
+                                                    {activePreset ? (
+                                                        <div style={{ marginTop: '8px', padding: '16px', backgroundColor: tokens.colorNeutralBackground2, borderRadius: '8px' }}>
+                                                            <Text block weight="semibold" style={{ marginBottom: '4px' }}>
+                                                                {activePreset.modelName}
+                                                            </Text>
+                                                            <Text block size={200} style={{ color: tokens.colorNeutralForeground3, wordBreak: 'break-all' }}>
+                                                                {activePreset.endpoint}
+                                                            </Text>
+                                                            <Text block size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '8px' }}>
+                                                                API key {activePreset.apiKey ? 'is set.' : 'is not set.'} Use &quot;Test Inference&quot; below to verify the connection.
+                                                            </Text>
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ padding: '20px', color: tokens.colorNeutralForeground3 }}>
+                                                            <Text block size={200}>
+                                                                No preset selected. Open the Providers tab to add one — you&apos;ll save the endpoint, API key, and model name together.
+                                                            </Text>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <div className={styles.cardGrid}>
@@ -764,6 +803,13 @@ export function AISettingsPanel({
                                     <SkillsPanel />
                                 )}
 
+                                {selectedTab === 'providers' && (
+                                    <SavedProvidersPanel
+                                        onChange={() => setPresetsVersion((v) => v + 1)}
+                                        onEditingStateChange={setProvidersEditing}
+                                    />
+                                )}
+
                                 {selectedTab === 'advanced' && (
                                     <Text>Advanced settings placehoder...</Text>
                                 )}
@@ -894,6 +940,37 @@ export function AISettingsPanel({
                                     </>
                                 )}
 
+                                {selectedTab === 'providers' && (
+                                    <>
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>About presets</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Each preset stores an endpoint, API key, and model name. Pick one in the chat header to switch profiles instantly.
+                                            </Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Active preset</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                {activePreset
+                                                    ? `${activePreset.name} — ${activePreset.modelName}`
+                                                    : 'None selected. Click a row to make it active.'}
+                                            </Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Storage</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Presets and API keys live in this browser&apos;s localStorage. They are not synced.
+                                            </Text>
+                                        </div>
+                                    </>
+                                )}
+
                                 {selectedTab === 'advanced' && (
                                     <>
                                         <div>
@@ -959,15 +1036,17 @@ export function AISettingsPanel({
                     )}
 
                     <DialogActions>
-                        <Button
-                            appearance="outline"
-                            icon={isTesting ? <Spinner size="tiny" /> : <Play24Regular />}
-                            onClick={handleTestInference}
-                            disabled={isTesting}
-                        >
-                            {isTesting ? 'Testing...' : 'Test Inference'}
-                        </Button>
-                        {modelConfig && activeProvider && (
+                        {!providersEditing && (
+                            <Button
+                                appearance="outline"
+                                icon={isTesting ? <Spinner size="tiny" /> : <Play24Regular />}
+                                onClick={handleTestInference}
+                                disabled={isTesting}
+                            >
+                                {isTesting ? 'Testing...' : 'Test Inference'}
+                            </Button>
+                        )}
+                        {!providersEditing && modelConfig && activeProvider && (
                             <Button
                                 appearance={isDefault ? "primary" : "outline"}
                                 onClick={() => {
@@ -1008,32 +1087,34 @@ export function AISettingsPanel({
                                     : `Set as Default`}
                             </Button>
                         )}
-                        <Button appearance="primary" onClick={() => {
-                            // Save custom endpoint if it has changed
-                            if (activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama) {
-                                if (customEndpoint) {
-                                    const endpointKey = activeProvider === ModelProvider.OpenAICompatible
-                                        ? 'defaultAIEndpoint_openaiCompatible'
-                                        : 'defaultAIEndpoint_ollama';
-                                    localStorage.setItem(endpointKey, customEndpoint);
+                        {!providersEditing && (
+                            <Button appearance="primary" onClick={() => {
+                                // Save custom endpoint if it has changed
+                                if (activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama) {
+                                    if (customEndpoint) {
+                                        const endpointKey = activeProvider === ModelProvider.OpenAICompatible
+                                            ? 'defaultAIEndpoint_openaiCompatible'
+                                            : 'defaultAIEndpoint_ollama';
+                                        localStorage.setItem(endpointKey, customEndpoint);
+                                    }
                                 }
-                            }
-                            // Save custom model name for OpenAI-compatible
-                            if (activeProvider === ModelProvider.OpenAICompatible && customModelName) {
-                                localStorage.setItem('customModelName_openaiCompatible', customModelName);
-                            }
-                            // Save API key for OpenAI-compatible
-                            if (activeProvider === ModelProvider.OpenAICompatible) {
-                                if (apiKey) {
-                                    localStorage.setItem('defaultAIKey_openaiCompatible', apiKey);
-                                } else {
-                                    localStorage.removeItem('defaultAIKey_openaiCompatible');
+                                // Save custom model name for OpenAI-compatible
+                                if (activeProvider === ModelProvider.OpenAICompatible && customModelName) {
+                                    localStorage.setItem('customModelName_openaiCompatible', customModelName);
                                 }
-                            }
-                            onClose();
-                        }} icon={<Save24Regular />}>
-                            Save
-                        </Button>
+                                // Save API key for OpenAI-compatible
+                                if (activeProvider === ModelProvider.OpenAICompatible) {
+                                    if (apiKey) {
+                                        localStorage.setItem('defaultAIKey_openaiCompatible', apiKey);
+                                    } else {
+                                        localStorage.removeItem('defaultAIKey_openaiCompatible');
+                                    }
+                                }
+                                onClose();
+                            }} icon={<Save24Regular />}>
+                                Save
+                            </Button>
+                        )}
                     </DialogActions>
 
                     <Toaster toasterId={toasterId} />

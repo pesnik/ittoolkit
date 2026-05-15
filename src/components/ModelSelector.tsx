@@ -11,7 +11,7 @@ import {
     Text,
     shorthands,
 } from '@fluentui/react-components';
-import { ModelConfig, ModelProvider } from '@/types/ai-types';
+import { ModelConfig, ModelProvider, SavedOpenAIProvider } from '@/types/ai-types';
 
 const useStyles = makeStyles({
     dropdown: {
@@ -66,6 +66,12 @@ interface ModelSelectorProps {
     onModelChange: (modelId: string) => void;
     disabled?: boolean;
     activeProvider?: ModelProvider;
+    /** Saved OpenAI-compatible presets. When present, the OpenAI-compatible combobox lists them as options. */
+    savedPresets?: SavedOpenAIProvider[];
+    /** Currently active preset id (for visual selection state). */
+    activePresetId?: string | null;
+    /** Called when the user picks a saved preset by id. */
+    onPresetChange?: (presetId: string) => void;
 }
 
 function formatFileSize(bytes?: number): string {
@@ -116,25 +122,44 @@ export function ModelSelector({
     onModelChange,
     disabled = false,
     activeProvider,
+    savedPresets,
+    activePresetId,
+    onPresetChange,
 }: ModelSelectorProps) {
     const styles = useStyles();
 
     const selectedModel = models.find((m) => m.id === selectedModelId);
     const isByok = activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama;
+    const isOpenAI = activeProvider === ModelProvider.OpenAICompatible;
+    const presets = isOpenAI ? (savedPresets ?? []) : [];
+    const activePreset = presets.find((p) => p.id === activePresetId);
 
     const placeholder = activeProvider
         ? `Select ${getProviderDisplayName(activeProvider)} model`
         : 'Select a model';
 
     if (isByok) {
+        const presetIds = new Set(presets.map((p) => p.id));
+        const comboValue = activePreset?.name
+            ?? selectedModel?.name
+            ?? (isOpenAI ? localStorage.getItem('customModelName_openaiCompatible') ?? '' : '');
+        const selectedOptions = activePreset
+            ? [activePreset.id]
+            : selectedModelId
+                ? [selectedModelId]
+                : [];
+
         return (
             <Combobox
                 className={styles.combobox}
                 placeholder={placeholder}
-                value={selectedModel?.name || localStorage.getItem('customModelName_openaiCompatible') || ''}
-                selectedOptions={selectedModelId ? [selectedModelId] : []}
+                value={comboValue}
+                selectedOptions={selectedOptions}
                 onOptionSelect={(_, data) => {
-                    if (data.optionValue) {
+                    if (!data.optionValue) return;
+                    if (presetIds.has(data.optionValue)) {
+                        onPresetChange?.(data.optionValue);
+                    } else {
                         onModelChange(data.optionValue);
                     }
                 }}
@@ -146,6 +171,21 @@ export function ModelSelector({
                 freeform
                 disabled={disabled}
             >
+                {presets.map((preset) => (
+                    <Option key={preset.id} value={preset.id} text={preset.name}>
+                        <div className={styles.optionContent}>
+                            <div className={styles.modelInfo}>
+                                <Text weight="semibold">{preset.name}</Text>
+                                <Text className={styles.modelSize}>{preset.modelName}</Text>
+                            </div>
+                            {preset.isDefault && (
+                                <Badge size="small" appearance="tint" color="brand">
+                                    Default
+                                </Badge>
+                            )}
+                        </div>
+                    </Option>
+                ))}
                 {models.map((model) => (
                     <Option key={model.id} value={model.id} text={model.name}>
                         <div className={styles.optionContent}>
