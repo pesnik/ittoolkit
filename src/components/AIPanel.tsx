@@ -939,7 +939,8 @@ export const AIPanel = ({
                         isLoading={isLoading}
                         isStreaming={isLoading && isStreamingProvider} // Only treat as streaming if loading AND provider matches
                         loadingStatus="Thinking..."
-                        placeholder="Ask about your files..."
+                        placeholder="Ask anything, or type / to invoke a skill"
+                        skills={skills}
                     />
                 )}
             </div>

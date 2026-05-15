@@ -23,7 +23,7 @@ import {
     Person24Regular,
     Stop24Regular,
 } from '@fluentui/react-icons';
-import { ChatMessage, MessageRole } from '@/types/ai-types';
+import { ChatMessage, MessageRole, SkillManifest } from '@/types/ai-types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ToolCallDisplay } from './ToolCallDisplay';
@@ -257,6 +257,82 @@ const useStyles = makeStyles({
         ...shorthands.gap('4px'),
         alignItems: 'center',
     },
+    inputWrapper: {
+        position: 'relative',
+        flex: 1,
+    },
+    palette: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 'calc(100% + 6px)',
+        maxHeight: '280px',
+        overflowY: 'auto',
+        backgroundColor: tokens.colorNeutralBackground1,
+        ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke1),
+        ...shorthands.borderRadius('8px'),
+        boxShadow: tokens.shadow16,
+        zIndex: 50,
+        ...shorthands.padding('4px'),
+    },
+    paletteRow: {
+        display: 'flex',
+        flexDirection: 'column',
+        ...shorthands.padding('8px', '10px'),
+        ...shorthands.borderRadius('6px'),
+        cursor: 'pointer',
+        ...shorthands.gap('2px'),
+        ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
+    },
+    paletteRowActive: {
+        backgroundColor: tokens.colorNeutralBackground3,
+    },
+    paletteRowTop: {
+        display: 'flex',
+        alignItems: 'center',
+        ...shorthands.gap('8px'),
+    },
+    paletteName: {
+        fontFamily: tokens.fontFamilyMonospace,
+        fontSize: '13px',
+        fontWeight: 600,
+        color: tokens.colorBrandForeground1,
+    },
+    paletteDesc: {
+        fontSize: '12px',
+        color: tokens.colorNeutralForeground2,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+    },
+    paletteBadge: {
+        fontSize: '10px',
+        ...shorthands.padding('1px', '6px'),
+        ...shorthands.borderRadius('10px'),
+        backgroundColor: tokens.colorNeutralBackground3,
+        color: tokens.colorNeutralForeground3,
+    },
+    paletteBadgeWarn: {
+        backgroundColor: tokens.colorPaletteYellowBackground2,
+        color: tokens.colorPaletteYellowForeground2,
+    },
+    paletteBadgeOk: {
+        backgroundColor: tokens.colorPaletteGreenBackground2,
+        color: tokens.colorPaletteGreenForeground2,
+    },
+    paletteFooter: {
+        ...shorthands.padding('6px', '10px'),
+        fontSize: '11px',
+        color: tokens.colorNeutralForeground3,
+        ...shorthands.borderTop('1px', 'solid', tokens.colorNeutralStroke2),
+        marginTop: '4px',
+    },
+    paletteEmpty: {
+        ...shorthands.padding('12px'),
+        fontSize: '12px',
+        color: tokens.colorNeutralForeground3,
+        textAlign: 'center',
+    },
 });
 
 interface AIChatProps {
@@ -267,6 +343,7 @@ interface AIChatProps {
     isStreaming?: boolean;
     placeholder?: string;
     loadingStatus?: React.ReactNode;
+    skills?: SkillManifest[];
 }
 
 export function AIChat({
@@ -277,11 +354,42 @@ export function AIChat({
     isStreaming = false,
     placeholder = 'Ask about your files...',
     loadingStatus = 'Thinking...',
+    skills = [],
 }: AIChatProps) {
     const styles = useStyles();
     const [inputValue, setInputValue] = useState('');
     const [greeting, setGreeting] = useState<string>(() => pickGreeting('there'));
+    const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
+    const [paletteDismissed, setPaletteDismissed] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    // Palette is open when:
+    //  - input starts with '/'
+    //  - user hasn't pressed Escape since they last typed '/'
+    //  - there's no space yet after the command name (once they're typing args,
+    //    we stop showing the palette so Enter sends the message)
+    const trimmed = inputValue.trimStart();
+    const slashActive = trimmed.startsWith('/');
+    const beforeSpace = slashActive ? trimmed.slice(1).split(/\s/)[0] : '';
+    const hasArgsTyped = slashActive && /\s/.test(trimmed.slice(1));
+    const filterQuery = beforeSpace.toLowerCase();
+    const filteredSkills = slashActive && !hasArgsTyped
+        ? skills.filter(
+            (s) =>
+                s.enabled &&
+                s.userInvocable !== false &&
+                s.name.toLowerCase().startsWith(filterQuery)
+        )
+        : [];
+    const paletteOpen = slashActive && !paletteDismissed && !hasArgsTyped;
+
+    useEffect(() => {
+        setSelectedSkillIndex(0);
+    }, [filterQuery, paletteOpen]);
+
+    useEffect(() => {
+        if (!slashActive) setPaletteDismissed(false);
+    }, [slashActive]);
 
     useEffect(() => {
         let cancelled = false;
@@ -305,10 +413,42 @@ export function AIChat({
         if (inputValue.trim() && !isLoading) {
             onSendMessage(inputValue.trim());
             setInputValue('');
+            setPaletteDismissed(false);
         }
     };
 
-    const handleKeyPress = (e: React.KeyboardEvent) => {
+    const acceptSkillAt = (index: number) => {
+        const skill = filteredSkills[index];
+        if (!skill) return;
+        // Replace the slash-command prefix with the full skill name + trailing space.
+        const restOfInput = trimmed.slice(beforeSpace.length + 1); // everything after "/name"
+        setInputValue(`/${skill.name} ${restOfInput.trimStart()}`);
+        setPaletteDismissed(false);
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (paletteOpen && filteredSkills.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelectedSkillIndex((i) => Math.min(i + 1, filteredSkills.length - 1));
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelectedSkillIndex((i) => Math.max(i - 1, 0));
+                return;
+            }
+            if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                e.preventDefault();
+                acceptSkillAt(selectedSkillIndex);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setPaletteDismissed(true);
+                return;
+            }
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSend();
@@ -398,14 +538,69 @@ export function AIChat({
             </div>
 
             <div className={styles.inputContainer}>
-                <Input
-                    className={styles.input}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder={placeholder}
-                    disabled={isLoading}
-                />
+                <div className={styles.inputWrapper}>
+                    {paletteOpen && (
+                        <div className={styles.palette} role="listbox" aria-label="Skill commands">
+                            {filteredSkills.length === 0 ? (
+                                <div className={styles.paletteEmpty}>
+                                    No skills match <code>/{filterQuery}</code>. Press Escape to dismiss.
+                                </div>
+                            ) : (
+                                <>
+                                    {filteredSkills.map((skill, i) => {
+                                        const isActive = i === selectedSkillIndex;
+                                        return (
+                                            <div
+                                                key={skill.name}
+                                                role="option"
+                                                aria-selected={isActive}
+                                                className={`${styles.paletteRow} ${isActive ? styles.paletteRowActive : ''}`}
+                                                onMouseEnter={() => setSelectedSkillIndex(i)}
+                                                onMouseDown={(e) => {
+                                                    // mousedown (not click) so the input doesn't blur first
+                                                    e.preventDefault();
+                                                    acceptSkillAt(i);
+                                                }}
+                                            >
+                                                <div className={styles.paletteRowTop}>
+                                                    <span className={styles.paletteName}>/{skill.name}</span>
+                                                    {skill.disableModelInvocation && (
+                                                        <span className={styles.paletteBadge}>Manual only</span>
+                                                    )}
+                                                    {skill.hasShellInjection && (
+                                                        <span
+                                                            className={`${styles.paletteBadge} ${skill.trusted ? styles.paletteBadgeOk : styles.paletteBadgeWarn}`}
+                                                        >
+                                                            {skill.trusted ? 'Shell · trusted' : 'Shell · blocked'}
+                                                        </span>
+                                                    )}
+                                                    {skill.argumentHint && (
+                                                        <span className={styles.paletteBadge}>{skill.argumentHint}</span>
+                                                    )}
+                                                </div>
+                                                <span className={styles.paletteDesc} title={skill.description}>
+                                                    {skill.description || '(no description)'}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                    <div className={styles.paletteFooter}>
+                                        ↑↓ navigate · Tab/Enter to accept · Esc to dismiss
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+                    <Input
+                        className={styles.input}
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder={placeholder}
+                        disabled={isLoading}
+                        style={{ width: '100%' }}
+                    />
+                </div>
                 {isLoading && onStopGeneration ? (
                     <Button
                         appearance="primary"
