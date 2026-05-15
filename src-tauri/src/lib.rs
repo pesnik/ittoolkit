@@ -7,6 +7,9 @@ mod execute_command;
 mod system_tools;
 mod partition;
 mod partition_commands;
+mod conversations;
+mod skills;
+mod user_info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,6 +21,9 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
+      }
+      if let Err(e) = skills::seed_default_skills(&app.handle()) {
+        log::warn!("Failed to seed default skills: {}", e);
       }
       Ok(())
     })
@@ -69,7 +75,23 @@ pub fn run() {
         partition_commands::mount_partition,
         partition_commands::validate_delete_partition,
         partition_commands::delete_partition,
-        partition_commands::execute_partition_moves
+        partition_commands::execute_partition_moves,
+        // Conversations
+        conversations::list_conversations,
+        conversations::load_conversation,
+        conversations::create_conversation,
+        conversations::append_message,
+        conversations::update_conversation_title,
+        conversations::delete_conversation,
+        // Skills
+        skills::list_skills,
+        skills::get_skill_source,
+        skills::load_skill_body,
+        skills::set_skill_enabled,
+        skills::set_skill_trusted,
+        skills::open_skills_folder,
+        // User info
+        user_info::get_user_name
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

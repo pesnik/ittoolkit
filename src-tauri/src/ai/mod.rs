@@ -17,11 +17,11 @@ pub enum ModelProvider {
     MLX,
 }
 
-/// AI operation modes
+/// AI operation modes. Agent is the only mode — kept as a single-variant
+/// enum so deserialization of `mode: "agent"` from the frontend keeps working.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AIMode {
-    QA,
     Agent,
 }
 

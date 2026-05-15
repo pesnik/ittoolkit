@@ -345,7 +345,7 @@ pub async fn get_llamacpp_status() -> ProviderStatus {
                 api_key: None,
                 is_available: is_downloaded,
                 size_bytes: Some(m.size_bytes),
-                recommended_for: vec![AIMode::QA, AIMode::Agent],
+                recommended_for: vec![AIMode::Agent],
             }
         }).collect()
     } else {

@@ -16,10 +16,11 @@ export enum ModelProvider {
 }
 
 /**
- * AI operation modes
+ * AI operation modes. Agent is the only mode — kept as a single-variant enum
+ * so existing `mode` fields in stored conversations and the inference request
+ * still serialize predictably.
  */
 export enum AIMode {
-    QA = 'qa',
     Agent = 'agent',
 }
 
@@ -228,6 +229,8 @@ export interface InferenceRequest {
     mode: AIMode;
     /** Optional tools for native function calling (OpenAI format) */
     tools?: Tool[];
+    /** Pre-formatted skill catalog injected into the {available_skills} prompt variable */
+    skillCatalog?: string;
 }
 
 /**
@@ -375,4 +378,65 @@ export interface AIError {
     details?: Record<string, unknown>;
     /** Suggested actions */
     suggestedActions?: string[];
+}
+
+/**
+ * Tool execution as stored on disk (matches Rust StoredToolExecution).
+ */
+export interface StoredToolExecution {
+    toolName: string;
+    arguments: Record<string, unknown> | unknown[] | null;
+    result?: string;
+    error?: string;
+    status: string;
+}
+
+/**
+ * Message as stored on disk (matches Rust StoredMessage).
+ */
+export interface StoredMessage {
+    id: string;
+    role: string;
+    content: string;
+    timestamp: number;
+    toolExecutions?: StoredToolExecution[];
+}
+
+/**
+ * Summary of a saved conversation (frontmatter-only view, used in history sidebar).
+ */
+export interface ConversationSummary {
+    id: string;
+    title: string;
+    model?: string;
+    provider?: string;
+    mode?: string;
+    created: string;
+    updated: string;
+    filePath: string;
+}
+
+/**
+ * Full conversation loaded from disk.
+ */
+export interface Conversation extends ConversationSummary {
+    messages: StoredMessage[];
+}
+
+/**
+ * Skill manifest (frontmatter + discovery state) returned by list_skills.
+ */
+export interface SkillManifest {
+    name: string;
+    description: string;
+    whenToUse?: string;
+    allowedTools: string[];
+    disableModelInvocation: boolean;
+    userInvocable: boolean;
+    arguments: string[];
+    argumentHint?: string;
+    path: string;
+    hasShellInjection: boolean;
+    enabled: boolean;
+    trusted: boolean;
 }

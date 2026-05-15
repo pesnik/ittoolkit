@@ -14,18 +14,51 @@ export interface ToolExecutionEvent {
     cancelled?: boolean;
 }
 
+export type ConfirmKind = 'write' | 'read';
+
 export interface InferenceWithToolsOptions {
     onChunk?: (chunk: string) => void;
     onToolExecution?: (event: ToolExecutionEvent) => void;
     onProgress?: (progress: any) => void;
-    onConfirmExecution?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>;
+    onConfirmExecution?: (
+        toolName: string,
+        args: Record<string, unknown>,
+        kind: ConfirmKind
+    ) => Promise<boolean>;
     isCancelled?: () => boolean;
 }
 
-const DESTRUCTIVE_PATTERNS = [
-    /^rm\s+/,
-    /^mv\s+/,
+// Commands that mutate the filesystem — confirm before running.
+const WRITE_PATTERNS: RegExp[] = [
+    /^\s*rm(\s|$)/,
+    /^\s*mv(\s|$)/,
+    /^\s*cp(\s|$)/,
+    /^\s*dd(\s|$)/,
+    /(^|[;&|]\s*)>\s*\S/,    // redirect to file (write/truncate)
+    /(^|[;&|]\s*)>>\s*\S/,   // append redirect
 ];
+
+// Commands that read file contents — confirm to protect the user's privacy
+// (the model will see the file body otherwise). Directory-listing and metadata
+// commands (ls, find, du, stat, file) are NOT gated; only commands that dump
+// contents into the agent's context are.
+const READ_PATTERNS: RegExp[] = [
+    /^\s*cat(\s|$)/,
+    /^\s*less(\s|$)/,
+    /^\s*more(\s|$)/,
+    /^\s*head(\s|$)/,
+    /^\s*tail(\s|$)/,
+    /^\s*bat(\s|$)/,
+    /^\s*od(\s|$)/,
+    /^\s*xxd(\s|$)/,
+    /^\s*strings(\s|$)/,
+];
+
+function classifyCommand(cmd: string): ConfirmKind | null {
+    if (WRITE_PATTERNS.some((p) => p.test(cmd))) return 'write';
+    if (READ_PATTERNS.some((p) => p.test(cmd))) return 'read';
+    return null;
+}
 
 interface ExecuteCommandResponse {
     stdout: string;
@@ -129,12 +162,11 @@ export async function runInferenceWithTools(
                 }
 
                 const cmd = (toolCall.arguments?.cmd as string) || '';
-                const needsConfirm = onConfirmExecution &&
-                    toolCall.name === 'execute_command' &&
-                    DESTRUCTIVE_PATTERNS.some(p => p.test(cmd));
+                const confirmKind = toolCall.name === 'execute_command' ? classifyCommand(cmd) : null;
+                const needsConfirm = !!(onConfirmExecution && confirmKind);
 
-                if (needsConfirm) {
-                    const confirmed = await onConfirmExecution(toolCall.name, toolCall.arguments);
+                if (needsConfirm && confirmKind) {
+                    const confirmed = await onConfirmExecution!(toolCall.name, toolCall.arguments, confirmKind);
                     if (isCancelled?.()) {
                         throw new Error('Inference cancelled');
                     }

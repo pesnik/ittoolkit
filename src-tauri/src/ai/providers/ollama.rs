@@ -111,17 +111,7 @@ pub async fn get_ollama_models(endpoint: Option<&str>) -> Result<Vec<ModelConfig
         .models
         .into_iter()
         .map(|m| {
-            // Determine recommended use cases based on model name
-            let recommended_for = if m.name.contains("3b") || m.name.contains("small") {
-                vec![AIMode::QA]
-            } else if m.name.contains("7b") {
-                vec![
-                    AIMode::QA,
-                    AIMode::Agent,
-                ]
-            } else {
-                vec![AIMode::Agent, AIMode::QA]
-            };
+            let recommended_for = vec![AIMode::Agent];
 
             ModelConfig {
                 id: format!("ollama-{}", m.name.replace(':', "-")),

@@ -6,7 +6,7 @@
  * Main AI panel that integrates chat, mode selector, and model selector.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     makeStyles,
     tokens,
@@ -22,7 +22,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { AIChat } from './AIChat';
-import { ModeSelector } from './ModeSelector';
+import { HistorySidebar } from './HistorySidebar';
 import {
     AIMode,
     ChatMessage,
@@ -30,6 +30,7 @@ import {
     ModelConfig,
     FileSystemContext,
     ModelProvider,
+    SkillManifest,
     ToolExecutionData,
 } from '@/types/ai-types';
 import {
@@ -38,17 +39,35 @@ import {
     createMessage,
     getDefaultModelForMode,
 } from '@/lib/ai/ai-service';
-import { aiConfig, getDefaultEndpoint, getDefaultProvider, loadAIConfig } from '@/lib/ai/config';
+import { aiConfig, getDefaultEndpoint, loadAIConfig } from '@/lib/ai/config';
 import { runInferenceWithTools } from '@/lib/ai/inference-with-tools';
 import { removeToolCallTags } from '@/lib/ai/tool-calling';
+import {
+    createConversation,
+    appendMessage as persistAppendMessage,
+    loadConversation,
+    fromStoredMessage,
+} from '@/lib/conversations/store';
+import {
+    listSkills,
+    loadSkillBody,
+    formatSkillCatalog,
+    parseSkillInvocation,
+} from '@/lib/skills/store';
 
 const useStyles = makeStyles({
     container: {
         display: 'flex',
-        flexDirection: 'column',
+        flexDirection: 'row',
         height: '100%',
         backgroundColor: tokens.colorNeutralBackground1,
         ...shorthands.borderLeft('1px', 'solid', tokens.colorNeutralStroke1),
+    },
+    mainColumn: {
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
     },
     header: {
         ...shorthands.padding('12px', '16px'),
@@ -140,11 +159,19 @@ export const AIPanel = ({
 }: AIPanelProps) => {
     const styles = useStyles();
 
-    const [mode, setMode] = useState<AIMode>(AIMode.QA);
+    // Agent is the only mode. Kept as a const to avoid a wide rename of "mode" call sites.
+    const mode = AIMode.Agent;
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isInitializing, setIsInitializing] = useState(true);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+
+    // Persistence + skills
+    const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+    const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+    const [skills, setSkills] = useState<SkillManifest[]>([]);
+    const skillsRef = useRef<SkillManifest[]>([]);
+    skillsRef.current = skills;
 
     const [availableModels, setAvailableModels] = useState<ModelConfig[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string | undefined>();
@@ -156,9 +183,10 @@ export const AIPanel = ({
     // Download state
     const [downloadProgress, setDownloadProgress] = useState<{ status: string; progress: number; modelId: string } | undefined>(undefined);
 
-    // Confirmation dialog for destructive commands
+    // Confirmation dialog (write = destructive mutation; read = privacy-sensitive content read)
     const [pendingConfirmation, setPendingConfirmation] = useState<{
         cmd: string;
+        kind: 'write' | 'read';
         resolve: (value: boolean) => void;
     } | null>(null);
     const rejectConfirmRef = useRef<(() => void) | null>(null);
@@ -220,15 +248,10 @@ export const AIPanel = ({
                 setAvailableModels(allModels);
 
                 // Check for saved defaults (localStorage overrides runtime config)
-                const savedProviderQA = localStorage.getItem('defaultAIProvider_qa') as ModelProvider | null;
-                const savedProviderAgent = localStorage.getItem('defaultAIProvider_agent') as ModelProvider | null;
-                const savedModelIdQA = localStorage.getItem('defaultAIModel_qa');
-                const savedModelIdAgent = localStorage.getItem('defaultAIModel_agent');
+                const savedProvider = localStorage.getItem('defaultAIProvider_agent') as ModelProvider | null;
+                const savedModelId = localStorage.getItem('defaultAIModel_agent');
 
-                // Get provider based on current mode (saved or env-configured)
-                const defaultProvider = mode === AIMode.Agent
-                    ? (savedProviderAgent || config.defaultProvider.agent)
-                    : (savedProviderQA || config.defaultProvider.qa);
+                const defaultProvider = savedProvider || config.defaultProvider;
 
                 // Get the correct endpoint based on the provider (use provider-specific keys)
                 const endpointKey = defaultProvider === ModelProvider.OpenAICompatible
@@ -241,11 +264,7 @@ export const AIPanel = ({
                         : config.endpoints.ollama
                 );
 
-                // Get model based on current mode
-                const savedModelId = mode === AIMode.Agent ? savedModelIdAgent : savedModelIdQA;
-                const configuredOpenAIModelId = mode === AIMode.Agent
-                    ? config.defaultModels.agent.openai
-                    : config.defaultModels.qa.openai;
+                const configuredOpenAIModelId = config.defaultModels.openai;
                 const defaultModelId = savedModelId || (defaultProvider === ModelProvider.OpenAICompatible ? configuredOpenAIModelId : null);
 
                 // If we're using OpenAI-compatible provider, create the model
@@ -265,7 +284,7 @@ export const AIPanel = ({
                             },
                             endpoint: defaultEndpoint,
                             isAvailable: true,
-                            recommendedFor: [AIMode.QA, AIMode.Agent],
+                            recommendedFor: [AIMode.Agent],
                             sizeBytes: 0
                         };
                         allModels.push(genericModel);
@@ -382,6 +401,63 @@ export const AIPanel = ({
         }
     };
 
+    // Load skills on mount; refresh after settings dialog closes
+    const refreshSkills = useCallback(async () => {
+        try {
+            const list = await listSkills();
+            setSkills(list);
+        } catch (e) {
+            console.warn('[AIPanel] Failed to list skills:', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        void refreshSkills();
+    }, [refreshSkills]);
+
+    useEffect(() => {
+        if (!showSettings) {
+            void refreshSkills();
+        }
+    }, [showSettings, refreshSkills]);
+
+    const handleNewChat = useCallback(() => {
+        setActiveConversationId(null);
+        setMessages([]);
+    }, []);
+
+    const handleSelectConversation = useCallback(async (id: string) => {
+        try {
+            const conv = await loadConversation(id);
+            setActiveConversationId(conv.id);
+            setMessages(conv.messages.map(fromStoredMessage));
+        } catch (e) {
+            console.error('[AIPanel] Failed to load conversation:', e);
+        }
+    }, []);
+
+    const persistMessage = useCallback(
+        async (msg: ChatMessage, modelLabel?: string, providerLabel?: string, modeLabel?: string) => {
+            try {
+                if (activeConversationId) {
+                    await persistAppendMessage(activeConversationId, msg);
+                    setHistoryRefreshKey((k) => k + 1);
+                } else {
+                    const conv = await createConversation(msg, {
+                        model: modelLabel,
+                        provider: providerLabel,
+                        mode: modeLabel,
+                    });
+                    setActiveConversationId(conv.id);
+                    setHistoryRefreshKey((k) => k + 1);
+                }
+            } catch (e) {
+                console.warn('[AIPanel] Persist failed:', e);
+            }
+        },
+        [activeConversationId]
+    );
+
     const handleStopGeneration = async () => {
         // Dismiss any pending confirmation dialog
         if (rejectConfirmRef.current) {
@@ -441,9 +517,40 @@ export const AIPanel = ({
             return cleaned;
         });
 
-        const userMessage = createMessage(MessageRole.User, content);
+        // Parse "/skill-name [args...]" — if it matches, we'll load the skill
+        // body and inject it as a system message ahead of the user turn.
+        const invocation = parseSkillInvocation(content, skillsRef.current);
+        let skillSystemMessage: ChatMessage | null = null;
+        let userVisibleContent = content;
+        if (invocation) {
+            try {
+                const body = await loadSkillBody(invocation.name, invocation.args);
+                skillSystemMessage = {
+                    id: `skill-${invocation.name}-${Date.now()}`,
+                    role: MessageRole.System,
+                    content: `# Skill invoked: /${invocation.name}\n\n${body}`,
+                    timestamp: Date.now(),
+                };
+                userVisibleContent = invocation.args
+                    ? `/${invocation.name} ${invocation.args}`
+                    : `/${invocation.name}`;
+            } catch (err) {
+                console.warn('[AIPanel] Failed to load skill body:', err);
+            }
+        }
+
+        const userMessage = createMessage(MessageRole.User, userVisibleContent);
         setMessages((prev) => [...prev, userMessage]);
         setIsLoading(true);
+
+        // Persist user message (fire-and-forget so we don't block the send)
+        const selectedModelForPersist = availableModels.find((m) => m.id === selectedModelId);
+        void persistMessage(
+            userMessage,
+            selectedModelForPersist?.modelId,
+            selectedModelForPersist?.provider,
+            mode
+        );
 
         // Generate a unique session ID for this request
         const sessionId = `session-${Date.now()}`;
@@ -525,7 +632,7 @@ export const AIPanel = ({
                         stream: true,
                     },
                     isAvailable: true,
-                    recommendedFor: [AIMode.QA, AIMode.Agent],
+                    recommendedFor: [AIMode.Agent],
                     ...(endpointToUse ? { endpoint: endpointToUse } : {}),
                     ...(apiKey ? { apiKey } : {}),
                 };
@@ -539,7 +646,11 @@ export const AIPanel = ({
             console.log('[AIPanel] Final modelConfigWithEndpoint.endpoint:', modelConfigWithEndpoint.endpoint);
 
             // Use the cleaned messages (not the stale 'messages' variable!)
-            const messagesToSend = [...cleanedMessages, userMessage];
+            const messagesToSend = skillSystemMessage
+                ? [...cleanedMessages, skillSystemMessage, userMessage]
+                : [...cleanedMessages, userMessage];
+
+            const skillCatalog = formatSkillCatalog(skillsRef.current);
 
             // Shared onProgress callback for LlamaCpp download progress
             const onProgress = (progress: any) => {
@@ -572,98 +683,21 @@ export const AIPanel = ({
                 }
             };
 
-            // Use tool-enabled inference for Agent mode, standard inference for QA mode
-            const response = mode === AIMode.Agent
-                ? await runInferenceWithTools({
-                    sessionId: sessionId,
-                    modelConfig: modelConfigWithEndpoint,
-                    messages: messagesToSend,
-                    fsContext,
-                    mode,
-                }, {
-                    onChunk: isStreaming ? (chunk) => {
-                        // Remove download message once we start getting chunks
-                        if (downloadMsgId) {
-                            setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
-                            downloadMsgId = ''; // Clear it so we only remove once
-                        }
-
-                        // On first chunk, replace the "thinking" message
-                        if (streamedContent === '') {
-                            streamedContent = chunk;
-                            setMessages((prev) => prev.map(msg =>
-                                msg.id === assistantMsgId
-                                    ? { ...msg, content: chunk, isStreaming: true }
-                                    : msg
-                            ));
-                            return;
-                        }
-
-                        // Handle subsequent streaming chunks
-                        streamedContent += chunk;
-                        setMessages((prev) => prev.map(msg =>
-                            msg.id === assistantMsgId
-                                ? { ...msg, content: streamedContent, isStreaming: true }
-                                : msg
-                        ));
-                    } : undefined,
-                    onToolExecution: (event) => {
-                        if (event.cancelled) {
-                            const existing = toolExecutions.find(e => e.toolName === event.toolName && e.status === 'executing');
-                            if (existing) {
-                                existing.status = 'cancelled';
-                                existing.result = event.result;
-                            }
-                        } else if (event.result || event.error) {
-                            const existing = toolExecutions.find(e => e.toolName === event.toolName);
-                            if (existing) {
-                                existing.status = event.error ? 'error' as const : 'success' as const;
-                                existing.result = event.result;
-                                existing.error = event.error;
-                                existing.executionTimeMs = event.executionTimeMs;
-                            }
-                        } else {
-                            toolExecutions.push({
-                                toolName: event.toolName,
-                                arguments: event.arguments as Record<string, unknown>,
-                                status: 'executing',
-                            });
-                        }
-
-                        setMessages((prev) => prev.map(msg =>
-                            msg.id === assistantMsgId
-                                ? { ...msg, toolExecutions: [...toolExecutions], isStreaming: true }
-                                : msg
-                        ));
-                    },
-                    isCancelled: () => confirmCancelled,
-                    onConfirmExecution: async (_toolName, args) => {
-                        const cmd = (args?.cmd as string) || '';
-                        return new Promise<boolean>((resolve) => {
-                            rejectConfirmRef.current = () => {
-                                confirmCancelled = true;
-                                resolve(false);
-                                setPendingConfirmation(null);
-                            };
-                            setPendingConfirmation({ cmd, resolve });
-                        });
-                    },
-                    onProgress,
-                })
-                : await runInference({
-                    sessionId: sessionId,
-                    modelConfig: modelConfigWithEndpoint,
-                    messages: messagesToSend,
-                    fsContext,
-                    mode,
-                }, isStreaming ? (chunk) => {
+            const response = await runInferenceWithTools({
+                sessionId: sessionId,
+                modelConfig: modelConfigWithEndpoint,
+                messages: messagesToSend,
+                fsContext,
+                mode,
+                skillCatalog,
+            }, {
+                onChunk: isStreaming ? (chunk) => {
                     // Remove download message once we start getting chunks
                     if (downloadMsgId) {
                         setMessages((prev) => prev.filter(msg => msg.id !== downloadMsgId));
-                        downloadMsgId = ''; // Clear it so we only remove once
+                        downloadMsgId = '';
                     }
 
-                    // On first chunk, replace the "thinking" message
                     if (streamedContent === '') {
                         streamedContent = chunk;
                         setMessages((prev) => prev.map(msg =>
@@ -674,20 +708,68 @@ export const AIPanel = ({
                         return;
                     }
 
-                    // Handle subsequent streaming chunks
                     streamedContent += chunk;
                     setMessages((prev) => prev.map(msg =>
                         msg.id === assistantMsgId
                             ? { ...msg, content: streamedContent, isStreaming: true }
                             : msg
                     ));
-                } : undefined, onProgress);
+                } : undefined,
+                onToolExecution: (event) => {
+                    if (event.cancelled) {
+                        const existing = toolExecutions.find(e => e.toolName === event.toolName && e.status === 'executing');
+                        if (existing) {
+                            existing.status = 'cancelled';
+                            existing.result = event.result;
+                        }
+                    } else if (event.result || event.error) {
+                        const existing = toolExecutions.find(e => e.toolName === event.toolName);
+                        if (existing) {
+                            existing.status = event.error ? 'error' as const : 'success' as const;
+                            existing.result = event.result;
+                            existing.error = event.error;
+                            existing.executionTimeMs = event.executionTimeMs;
+                        }
+                    } else {
+                        toolExecutions.push({
+                            toolName: event.toolName,
+                            arguments: event.arguments as Record<string, unknown>,
+                            status: 'executing',
+                        });
+                    }
+
+                    setMessages((prev) => prev.map(msg =>
+                        msg.id === assistantMsgId
+                            ? { ...msg, toolExecutions: [...toolExecutions], isStreaming: true }
+                            : msg
+                    ));
+                },
+                isCancelled: () => confirmCancelled,
+                onConfirmExecution: async (_toolName, args, kind) => {
+                    const cmd = (args?.cmd as string) || '';
+                    return new Promise<boolean>((resolve) => {
+                        rejectConfirmRef.current = () => {
+                            confirmCancelled = true;
+                            resolve(false);
+                            setPendingConfirmation(null);
+                        };
+                        setPendingConfirmation({ cmd, kind, resolve });
+                    });
+                },
+                onProgress,
+            });
 
             // Clean tool call tags from the response before displaying to user
             const cleanedContent = removeToolCallTags(response.message.content);
             const cleanedMessage = {
                 ...response.message,
                 content: cleanedContent || response.message.content, // Fallback to original if cleaning results in empty string
+            };
+
+            const finalAssistantMsg: ChatMessage = {
+                ...cleanedMessage,
+                toolExecutions: toolExecutions.length > 0 ? [...toolExecutions] : cleanedMessage.toolExecutions,
+                isStreaming: false,
             };
 
             if (isStreaming) {
@@ -698,13 +780,20 @@ export const AIPanel = ({
                 // Final update for streaming (ensure exact final state and remove streaming flag)
                 setMessages((prev) => prev.map(msg =>
                     msg.id === assistantMsgId
-                        ? { ...cleanedMessage, isStreaming: false }
+                        ? finalAssistantMsg
                         : msg
                 ));
             } else {
                 // Non-streaming: Add the full message now
-                setMessages((prev) => [...prev, cleanedMessage]);
+                setMessages((prev) => [...prev, finalAssistantMsg]);
             }
+
+            void persistMessage(
+                finalAssistantMsg,
+                selectedModelForPersist?.modelId,
+                selectedModelForPersist?.provider,
+                mode
+            );
         } catch (error: any) {
             console.error('Inference failed:', error);
 
@@ -736,68 +825,6 @@ export const AIPanel = ({
         }
     };
 
-    const handleModeChange = (newMode: AIMode) => {
-        setMode(newMode);
-
-        // Switch to appropriate provider and model for the new mode
-        const config = loadAIConfig();
-
-        // Get saved provider and model for the new mode from localStorage
-        const savedProviderKey = newMode === AIMode.Agent ? 'defaultAIProvider_agent' : 'defaultAIProvider_qa';
-        const savedModelKey = newMode === AIMode.Agent ? 'defaultAIModel_agent' : 'defaultAIModel_qa';
-        const savedProvider = localStorage.getItem(savedProviderKey) as ModelProvider | null;
-        const savedModelId = localStorage.getItem(savedModelKey);
-
-        // Determine the provider to use: saved > env-configured
-        const providerToUse = savedProvider || getDefaultProvider(newMode, config);
-
-        // Switch to the new provider
-        setActiveProvider(providerToUse);
-
-        // If there's a saved model for this mode, use it
-        if (savedModelId) {
-            const savedModel = availableModels.find(m => m.id === savedModelId);
-            if (savedModel) {
-                setSelectedModelId(savedModel.id);
-                return;
-            }
-        }
-
-        // Otherwise, fall back to env-configured default for this mode and provider
-        const modeKey = newMode === AIMode.Agent ? 'agent' : 'qa';
-        let defaultModelId: string | undefined;
-
-        switch (providerToUse) {
-            case ModelProvider.Ollama:
-                defaultModelId = config.defaultModels[modeKey].ollama;
-                break;
-            case ModelProvider.OpenAICompatible:
-                defaultModelId = config.defaultModels[modeKey].openai;
-                break;
-            case ModelProvider.LlamaCpp:
-                defaultModelId = config.defaultModels[modeKey].llamacpp;
-                break;
-        }
-
-        if (defaultModelId) {
-            const defaultModel = availableModels.find(m => m.modelId === defaultModelId && m.provider === providerToUse);
-            if (defaultModel) {
-                setSelectedModelId(defaultModel.id);
-                return;
-            }
-        }
-
-        // Final fallback: use getDefaultModelForMode
-        const fallbackModel = getDefaultModelForMode(newMode, availableModels);
-        if (fallbackModel) {
-            setSelectedModelId(fallbackModel.id);
-            setActiveProvider(fallbackModel.provider);
-        }
-
-        // Optionally clear messages when switching modes
-        // setMessages([]);
-    };
-
     // Check if we are using a streaming provider
     const selectedModel = availableModels.find(m => m.id === selectedModelId);
     // All providers now stream
@@ -816,13 +843,21 @@ export const AIPanel = ({
 
     return (
         <div className={styles.container}>
+            <HistorySidebar
+                activeConversationId={activeConversationId}
+                onSelect={handleSelectConversation}
+                onNew={handleNewChat}
+                refreshKey={historyRefreshKey}
+            />
+            <div className={styles.mainColumn}>
             <div className={styles.header}>
                 <div className={styles.headerLeft}>
-                    <ModeSelector
-                        selectedMode={mode}
-                        onModeChange={handleModeChange}
-                        disabled={isLoading || showSettings}
-                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
+                        <Text weight="semibold" size={300}>RoRo</Text>
+                        <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>
+                            your self-service IT agent
+                        </Text>
+                    </div>
                 </div>
                 <div className={styles.headerRight}>
                     <Button
@@ -912,13 +947,19 @@ export const AIPanel = ({
                 />
             )}
 
-            {/* Confirmation dialog for destructive commands */}
+            {/* Confirmation dialog for write (destructive) or read (privacy-sensitive) commands */}
             {pendingConfirmation && (
                 <div className={styles.confirmOverlay}>
                     <div className={styles.confirmDialog}>
-                        <div className={styles.confirmTitle}>Confirm Destructive Command</div>
+                        <div className={styles.confirmTitle}>
+                            {pendingConfirmation.kind === 'read'
+                                ? 'Confirm file read'
+                                : 'Confirm destructive command'}
+                        </div>
                         <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
-                            The AI wants to execute a potentially destructive command:
+                            {pendingConfirmation.kind === 'read'
+                                ? 'The agent wants to read file contents into its context. Approve only if this file is safe to share with the model:'
+                                : 'The agent wants to execute a potentially destructive command:'}
                         </Text>
                         <div className={styles.confirmCommand}>{pendingConfirmation.cmd}</div>
                         <div className={styles.confirmActions}>
@@ -944,6 +985,7 @@ export const AIPanel = ({
                     </div>
                 </div>
             )}
+            </div>
         </div>
     );
 }

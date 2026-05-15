@@ -5,24 +5,14 @@
  * Reads from .env with defaults from .env.example.
  */
 
-import { ModelProvider, AIMode } from '@/types/ai-types';
+import { ModelProvider } from '@/types/ai-types';
 
 export interface AIConfig {
-    defaultProvider: {
-        qa: ModelProvider;
-        agent: ModelProvider;
-    };
+    defaultProvider: ModelProvider;
     defaultModels: {
-        qa: {
-            ollama: string;
-            openai: string;
-            llamacpp: string;
-        };
-        agent: {
-            ollama: string;
-            openai: string;
-            llamacpp: string;
-        };
+        ollama: string;
+        openai: string;
+        llamacpp: string;
     };
     endpoints: {
         ollama: string;
@@ -43,27 +33,30 @@ export interface AIConfig {
 }
 
 /**
- * Load AI configuration from environment variables
- * Uses defaults from .env.example when .env is not present
+ * Load AI configuration from environment variables.
+ * Falls back to NEXT_PUBLIC_*_AGENT vars for backwards compatibility with
+ * earlier two-mode configs that may still be set in users' .env files.
  */
 export function loadAIConfig(): AIConfig {
     return {
-        defaultProvider: {
-            qa: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_QA as ModelProvider) || ModelProvider.LlamaCpp,
-            agent: (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_AGENT as ModelProvider) || ModelProvider.LlamaCpp,
-        },
+        defaultProvider:
+            (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER as ModelProvider) ||
+            (process.env.NEXT_PUBLIC_DEFAULT_AI_PROVIDER_AGENT as ModelProvider) ||
+            ModelProvider.LlamaCpp,
 
         defaultModels: {
-            qa: {
-                ollama: process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL_QA || 'llama3.2:1B',
-                openai: process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL_QA || 'openai-compatible-generic',
-                llamacpp: process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL_QA || 'qwen2.5-coder-0.5b-q8_0.gguf',
-            },
-            agent: {
-                ollama: process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL_AGENT || 'qwen2.5-coder:7b',
-                openai: process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL_AGENT || 'openai-compatible-generic',
-                llamacpp: process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL_AGENT || 'qwen2.5-coder-0.5b-q8_0.gguf',
-            },
+            ollama:
+                process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL ||
+                process.env.NEXT_PUBLIC_DEFAULT_OLLAMA_MODEL_AGENT ||
+                'qwen2.5-coder:7b',
+            openai:
+                process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL ||
+                process.env.NEXT_PUBLIC_DEFAULT_OPENAI_MODEL_AGENT ||
+                'openai-compatible-generic',
+            llamacpp:
+                process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL ||
+                process.env.NEXT_PUBLIC_DEFAULT_LLAMACPP_MODEL_AGENT ||
+                'qwen2.5-coder-0.5b-q8_0.gguf',
         },
 
         endpoints: {
@@ -88,20 +81,12 @@ export function loadAIConfig(): AIConfig {
     };
 }
 
-/**
- * Get the default provider for a mode
- */
-export function getDefaultProvider(mode: AIMode = AIMode.QA, config?: AIConfig): ModelProvider {
-    const cfg = config || loadAIConfig();
-    return mode === AIMode.Agent ? cfg.defaultProvider.agent : cfg.defaultProvider.qa;
+export function getDefaultProvider(config?: AIConfig): ModelProvider {
+    return (config || loadAIConfig()).defaultProvider;
 }
 
-/**
- * Get the default endpoint for a provider
- */
 export function getDefaultEndpoint(provider: ModelProvider, config?: AIConfig): string | undefined {
     const cfg = config || loadAIConfig();
-
     switch (provider) {
         case ModelProvider.Ollama:
             return cfg.endpoints.ollama;
@@ -114,20 +99,15 @@ export function getDefaultEndpoint(provider: ModelProvider, config?: AIConfig): 
     }
 }
 
-/**
- * Get the default model ID for a provider and mode
- */
-export function getDefaultModelId(provider: ModelProvider, mode: AIMode = AIMode.QA, config?: AIConfig): string {
+export function getDefaultModelId(provider: ModelProvider, config?: AIConfig): string {
     const cfg = config || loadAIConfig();
-    const modeKey = mode === AIMode.Agent ? 'agent' : 'qa';
-
     switch (provider) {
         case ModelProvider.Ollama:
-            return cfg.defaultModels[modeKey].ollama;
+            return cfg.defaultModels.ollama;
         case ModelProvider.OpenAICompatible:
-            return cfg.defaultModels[modeKey].openai;
+            return cfg.defaultModels.openai;
         case ModelProvider.LlamaCpp:
-            return cfg.defaultModels[modeKey].llamacpp;
+            return cfg.defaultModels.llamacpp;
         default:
             return '';
     }

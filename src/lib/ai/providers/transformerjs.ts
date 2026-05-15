@@ -191,7 +191,7 @@ export function getAvailableTransformerJSModels(): ModelConfig[] {
             },
             isAvailable: true,
             sizeBytes: 268_000_000, // ~268 MB
-            recommendedFor: ['qa' as any],
+            recommendedFor: ['agent' as any],
         },
         {
             id: 'transformerjs-bart-large',
@@ -206,7 +206,7 @@ export function getAvailableTransformerJSModels(): ModelConfig[] {
             },
             isAvailable: true,
             sizeBytes: 1_630_000_000, // ~1.6 GB
-            recommendedFor: ['qa' as any],
+            recommendedFor: ['agent' as any],
         },
     ];
 }

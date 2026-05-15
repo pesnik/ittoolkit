@@ -131,7 +131,7 @@ export default function Home() {
         className={styles.aiPanelContainer}
         style={{
           width: isAIPanelOpen
-            ? (isManualResize ? `${panelWidth}px` : '30vw')
+            ? (isManualResize ? `${panelWidth}px` : '40vw')
             : '0px',
           minWidth: isAIPanelOpen ? 'auto' : '0px', // Allow minWidth to be auto when open, 0 when closed
           maxWidth: isAIPanelOpen ? '50vw' : '0px', // Prevent it from taking over too much space in auto mode

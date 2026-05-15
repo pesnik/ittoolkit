@@ -42,6 +42,7 @@ import {
 import { ModelConfig, ModelParameters, ModelProvider, AIMode, MessageRole } from '@/types/ai-types';
 import { runInference, createMessage } from '@/lib/ai/ai-service';
 import { loadAIConfig } from '@/lib/ai/config';
+import { SkillsPanel } from './SkillsPanel';
 
 const useStyles = makeStyles({
     dialogSurface: {
@@ -206,8 +207,8 @@ export function AISettingsPanel({
 
     // Track if current config is set as default for the current mode
     const [isDefault, setIsDefault] = React.useState<boolean>(() => {
-        const providerKey = currentMode === AIMode.Agent ? 'defaultAIProvider_agent' : 'defaultAIProvider_qa';
-        const modelKey = currentMode === AIMode.Agent ? 'defaultAIModel_agent' : 'defaultAIModel_qa';
+        const providerKey = 'defaultAIProvider_agent';
+        const modelKey = 'defaultAIModel_agent';
         const savedProvider = localStorage.getItem(providerKey);
         const savedModel = localStorage.getItem(modelKey);
         const isProviderMatch = savedProvider === activeProvider;
@@ -241,8 +242,8 @@ export function AISettingsPanel({
 
     // Sync isDefault when activeProvider, modelConfig, or mode changes
     React.useEffect(() => {
-        const providerKey = currentMode === AIMode.Agent ? 'defaultAIProvider_agent' : 'defaultAIProvider_qa';
-        const modelKey = currentMode === AIMode.Agent ? 'defaultAIModel_agent' : 'defaultAIModel_qa';
+        const providerKey = 'defaultAIProvider_agent';
+        const modelKey = 'defaultAIModel_agent';
         const savedProvider = localStorage.getItem(providerKey);
         const savedModel = localStorage.getItem(modelKey);
         const isProviderMatch = savedProvider === activeProvider;
@@ -326,7 +327,7 @@ export function AISettingsPanel({
                     sessionId: 'test-inference',
                     modelConfig: testModelConfig,
                     messages: [testMessage],
-                    mode: AIMode.QA,
+                    mode: AIMode.Agent,
                 },
                 (chunk) => {
                     streamedResponse += chunk;
@@ -406,13 +407,14 @@ export function AISettingsPanel({
             <DialogSurface className={styles.dialogSurface}>
                 <DialogBody>
                     <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-                        <Text size={500} weight="semibold">Configure AI Model</Text>
+                        <Text size={500} weight="semibold">Configure your Agent Harness</Text>
                     </div>
 
                     <div className={styles.tabList}>
                         <TabList selectedValue={selectedTab} onTabSelect={(_, data) => setSelectedTab(data.value as string)}>
                             <Tab value="general">General</Tab>
                             <Tab value="parameters">Parameters</Tab>
+                            <Tab value="skills">Skills</Tab>
                             <Tab value="advanced">Advanced</Tab>
                         </TabList>
                     </div>
@@ -428,11 +430,8 @@ export function AISettingsPanel({
                                             <Text size={200} block style={{ color: tokens.colorNeutralForeground3, marginBottom: '8px' }}>
                                                 Choose your AI engine. Models below are filtered by this provider.
                                             </Text>
-                                            <Badge appearance="tint" color="informative" style={{ marginBottom: '8px' }}>
-                                                Current Mode: {currentMode === AIMode.Agent ? 'Agent Mode' : 'QA Mode'}
-                                            </Badge>
                                             <Text size={200} block style={{ color: tokens.colorNeutralForeground3, marginBottom: '8px' }}>
-                                                You can set different default models for each mode. The selected model will be used when you switch to this mode.
+                                                The selected provider and model handle every chat. Settings are saved per-provider.
                                             </Text>
                                             <div style={{ marginTop: '8px' }}>
                                                 <Dropdown
@@ -678,6 +677,10 @@ export function AISettingsPanel({
                                     </>
                                 )}
 
+                                {selectedTab === 'skills' && (
+                                    <SkillsPanel />
+                                )}
+
                                 {selectedTab === 'advanced' && (
                                     <Text>Advanced settings placehoder...</Text>
                                 )}
@@ -691,9 +694,7 @@ export function AISettingsPanel({
                                     <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Recommended for:</Label>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
                                         {modelConfig.recommendedFor.map(mode => (
-                                            <Text key={mode} weight="medium">
-                                                {mode === AIMode.QA ? 'QA Mode' : 'Agent Mode'}
-                                            </Text>
+                                            <Text key={mode} weight="medium">Agent Mode</Text>
                                         ))}
                                     </div>
                                 </div>
@@ -791,8 +792,8 @@ export function AISettingsPanel({
                             <Button
                                 appearance={isDefault ? "primary" : "outline"}
                                 onClick={() => {
-                                    const providerKey = currentMode === AIMode.Agent ? 'defaultAIProvider_agent' : 'defaultAIProvider_qa';
-                                    const modelKey = currentMode === AIMode.Agent ? 'defaultAIModel_agent' : 'defaultAIModel_qa';
+                                    const providerKey = 'defaultAIProvider_agent';
+                                    const modelKey = 'defaultAIModel_agent';
 
                                     if (isDefault) {
                                         // Remove provider and model for this mode

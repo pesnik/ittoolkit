@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
     Button,
     Input,
@@ -26,6 +27,54 @@ import { ChatMessage, MessageRole } from '@/types/ai-types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ToolCallDisplay } from './ToolCallDisplay';
+
+function detectOSName(): string {
+    if (typeof navigator === 'undefined') return 'your system';
+    const ua = navigator.userAgent;
+    if (/Mac OS X|Macintosh/i.test(ua)) return 'macOS';
+    if (/Windows NT 10/i.test(ua)) return 'Windows 10/11';
+    if (/Windows/i.test(ua)) return 'Windows';
+    if (/Ubuntu/i.test(ua)) return 'Ubuntu';
+    if (/Fedora/i.test(ua)) return 'Fedora';
+    if (/Linux/i.test(ua)) return 'Linux';
+    return 'your system';
+}
+
+/**
+ * Pull a friendly first-name-ish display out of an OS username:
+ *   "r_hasan"   -> "Hasan"   (first segment "r" is too short, take longer one)
+ *   "john.doe"  -> "John"
+ *   "alice"     -> "Alice"
+ *   ""          -> "there"
+ */
+function prettifyUserName(raw: string | null): string {
+    if (!raw) return 'there';
+    const parts = raw.split(/[._\-\s]+/).filter(Boolean);
+    if (parts.length === 0) return 'there';
+    let chosen = parts[0];
+    if (chosen.length < 2) {
+        const longer = parts.find((p) => p.length >= 2);
+        if (longer) chosen = longer;
+    }
+    if (!chosen) return 'there';
+    return chosen.charAt(0).toUpperCase() + chosen.slice(1).toLowerCase();
+}
+
+const GREETINGS = (name: string, os: string): string[] => [
+    `Hey ${name} — RoRo here. What's up?`,
+    `${name}, RoRo at your service. What shall we tackle?`,
+    `Hi ${name}. RoRo here, running on ${os} and ready to help.`,
+    `Reporting in, ${name}. Stuck process? Weird log? Disk full?`,
+    `RoRo on duty for ${name}. Where shall we start?`,
+    `${name}! Good to see you. RoRo here on ${os}.`,
+    `Welcome back, ${name}. RoRo's listening.`,
+];
+
+function pickGreeting(name: string): string {
+    const os = detectOSName();
+    const options = GREETINGS(name, os);
+    return options[Math.floor(Math.random() * options.length)];
+}
 
 const useStyles = makeStyles({
     container: {
@@ -185,6 +234,23 @@ const useStyles = makeStyles({
         height: '100%',
         ...shorthands.gap('8px'),
         color: tokens.colorNeutralForeground3,
+        textAlign: 'center',
+        ...shorthands.padding('24px'),
+    },
+    emptyTitle: {
+        display: 'block',
+        textAlign: 'center',
+        fontSize: '15px',
+        fontWeight: 500,
+        color: tokens.colorNeutralForeground1,
+        maxWidth: '420px',
+    },
+    emptyHint: {
+        display: 'block',
+        textAlign: 'center',
+        fontSize: '12px',
+        color: tokens.colorNeutralForeground3,
+        maxWidth: '420px',
     },
     streamingIndicator: {
         display: 'flex',
@@ -214,7 +280,21 @@ export function AIChat({
 }: AIChatProps) {
     const styles = useStyles();
     const [inputValue, setInputValue] = useState('');
+    const [greeting, setGreeting] = useState<string>(() => pickGreeting('there'));
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        invoke<string>('get_user_name')
+            .then((raw) => {
+                if (cancelled) return;
+                setGreeting(pickGreeting(prettifyUserName(raw)));
+            })
+            .catch(() => {
+                /* keep the fallback greeting */
+            });
+        return () => { cancelled = true; };
+    }, []);
 
     // Auto-scroll to bottom when new messages arrive
     useEffect(() => {
@@ -246,7 +326,10 @@ export function AIChat({
                 {messages.length === 0 ? (
                     <div className={styles.emptyState}>
                         <Bot24Regular />
-                        <Text>Start a conversation about your files</Text>
+                        <Text className={styles.emptyTitle}>{greeting}</Text>
+                        <Text className={styles.emptyHint}>
+                            Ask anything, or type <code>/</code> to invoke a skill — try <code>/disk-cleanup</code> or <code>/network-diagnostics</code>.
+                        </Text>
                     </div>
                 ) : (
                     <>

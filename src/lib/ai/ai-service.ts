@@ -64,12 +64,12 @@ export const KNOWN_MODELS: ModelConfig[] = [
     {
         id: 'llama3.2:1B', name: 'Llama 3.2 1B', provider: ModelProvider.Ollama, isAvailable: false,
         modelId: 'llama3.2:1B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
-        recommendedFor: [AIMode.QA], sizeBytes: 1.3e9
+        recommendedFor: [AIMode.Agent], sizeBytes: 1.3e9
     },
     {
         id: 'llama3.2:3B', name: 'Llama 3.2 3B', provider: ModelProvider.Ollama, isAvailable: false,
         modelId: 'llama3.2:3B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
-        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 2.0e9
+        recommendedFor: [AIMode.Agent], sizeBytes: 2.0e9
     },
     {
         id: 'mistral', name: 'Mistral 7B', provider: ModelProvider.Ollama, isAvailable: false,
@@ -84,29 +84,29 @@ export const KNOWN_MODELS: ModelConfig[] = [
     {
         id: 'gemma:2b', name: 'Gemma 2B', provider: ModelProvider.Ollama, isAvailable: false,
         modelId: 'gemma:2b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
-        recommendedFor: [AIMode.QA], sizeBytes: 1.5e9
+        recommendedFor: [AIMode.Agent], sizeBytes: 1.5e9
     },
     // LlamaCpp (GGUF) - Local inference via bundled llama.cpp
     {
         id: 'llamacpp-coder05b', name: 'Qwen 2.5 Coder 0.5B (Q8_0)', provider: ModelProvider.LlamaCpp, isAvailable: false,
         modelId: 'qwen2.5-coder-0.5b-q8_0.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
-        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 495e6
+        recommendedFor: [AIMode.Agent], sizeBytes: 495e6
     },
     {
         id: 'llamacpp-qwen3b', name: 'Qwen 2.5 VL 3B (Q4_K_M)', provider: ModelProvider.LlamaCpp, isAvailable: false,
         modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
-        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 2.0e9
+        recommendedFor: [AIMode.Agent], sizeBytes: 2.0e9
     },
     // OpenAI-compatible - Generic entries for BYOK providers (OpenRouter, etc.)
     {
         id: 'openai-compatible-generic', name: 'OpenAI Compatible (Custom)', provider: ModelProvider.OpenAICompatible, isAvailable: true,
         modelId: 'openai-compatible-generic', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
-        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: undefined
+        recommendedFor: [AIMode.Agent], sizeBytes: undefined
     },
     {
         id: 'unified-mode', name: 'Unified Mode (Auto-detect)', provider: ModelProvider.OpenAICompatible, isAvailable: true,
         modelId: 'unified-mode', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
-        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: undefined
+        recommendedFor: [AIMode.Agent], sizeBytes: undefined
     }
 ];
 
@@ -195,7 +195,7 @@ export async function getProvidersStatus(): Promise<ProviderStatus[]> {
                     },
                     isAvailable: true,
                     sizeBytes: 268_000_000,
-                    recommendedFor: [AIMode.QA],
+                    recommendedFor: [AIMode.Agent],
                 },
                 {
                     id: 'transformerjs-bart-large',
@@ -210,7 +210,7 @@ export async function getProvidersStatus(): Promise<ProviderStatus[]> {
                     },
                     isAvailable: true,
                     sizeBytes: 1_630_000_000,
-                    recommendedFor: [AIMode.QA],
+                    recommendedFor: [AIMode.Agent],
                 },
             ],
         };
@@ -316,10 +316,9 @@ export async function runInference(
     const messagesWithSystem = prepareMessages(request);
     let requestWithSystem = { ...request, messages: messagesWithSystem };
 
-    // Add native function calling tool for Agent mode (LlamaCpp + OpenAI-compatible)
-    // This is more reliable than prompt-based XML tool calling
-    if (request.mode === AIMode.Agent &&
-        [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)) {
+    // Add native function calling tool for providers that support it
+    // (LlamaCpp + OpenAI-compatible). More reliable than XML tool calling.
+    if ([ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)) {
         requestWithSystem = {
             ...requestWithSystem,
             tools: [EXECUTE_COMMAND_TOOL],
@@ -376,9 +375,7 @@ function prepareMessages(request: InferenceRequest): ChatMessage[] {
             ? buildFileSystemContext(request.fsContext)
             : 'No file system context available.';
 
-    // Build system prompt with execute_command tool description if in Agent mode
-    const executeCommandDesc = request.mode === AIMode.Agent
-        ? `## execute_command Tool
+    const executeCommandDesc = `## execute_command Tool
 
 You have access to the \`execute_command\` tool which runs shell commands on the user's machine.
 
@@ -394,20 +391,21 @@ Returns: { stdout: string, stderr: string, exit_code: number, timed_out: boolean
 IMPORTANT USAGE RULES:
 - ALWAYS use this tool for ALL file operations. NEVER guess or hallucinate file contents.
 - Use standard Unix commands: \`ls\`, \`cat\`, \`find\`, \`grep\`, \`du\`, \`mv\`, \`cp\`, \`mkdir\`, \`rm\`, \`head\`, \`tail\`, \`wc\`, \`md5sum\`, \`file\`, \`stat\`
-- For reading files: \`cat <path>\` or \`head -n 100 <path>\`
+- For reading files: \`cat <path>\` or \`head -n 100 <path>\` — these prompt the user for permission before running.
 - For listing directories: \`ls -la <path>\`
 - For searching: \`find <dir> -name "*pattern*"\` or \`grep -r "pattern" <dir>\`
 - For directory sizes: \`du -sh <dir>/*\`
 - Output is capped at ~10K characters. For large outputs, use \`head\`/\`tail\` to limit.
 - The command runs in the specified working directory.
 - Default timeout is 30 seconds. Use timeout_secs for long-running operations.
-- Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.`
-        : '(Tools not available in QA mode)';
+- Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.
+- File-reading commands (cat/less/more/head/tail/bat/od/xxd/strings) and write/move commands (rm/mv/cp/dd, shell redirects) prompt the user for explicit approval before executing.`;
 
     const systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,
         current_path: request.fsContext?.currentPath || '/',
         mcp_tools: executeCommandDesc,
+        available_skills: request.skillCatalog || '(no skills installed)',
     });
 
     console.log('[ai-service] System prompt built:');
@@ -464,32 +462,19 @@ export function createMessage(
 }
 
 /**
- * Get default model for a mode
+ * Get the recommended default model. Prefers larger models since the only
+ * mode is Agent (which benefits from stronger tool-using models).
  */
 export function getDefaultModelForMode(
-    mode: AIMode,
+    _mode: AIMode | undefined,
     availableModels: ModelConfig[]
 ): ModelConfig | null {
-    // Filter models recommended for this mode
     const recommendedModels = availableModels.filter((m) =>
-        m.recommendedFor.includes(mode)
+        m.recommendedFor.includes(AIMode.Agent)
     );
-
-    if (recommendedModels.length === 0) {
-        return availableModels[0] || null;
-    }
-
-    // Prefer larger models for agent mode
-    if (mode === AIMode.Agent) {
-        return recommendedModels.sort((a, b) => {
-            const sizeA = a.sizeBytes || 0;
-            const sizeB = b.sizeBytes || 0;
-            return sizeB - sizeA;
-        })[0];
-    }
-
-    // For QA, prefer medium-sized models
-    return recommendedModels[0];
+    const pool = recommendedModels.length > 0 ? recommendedModels : availableModels;
+    if (pool.length === 0) return null;
+    return [...pool].sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))[0];
 }
 
 /**

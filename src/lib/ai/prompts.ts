@@ -11,36 +11,6 @@ export function buildPrompt(
     return result;
 }
 
-export const QA_TEMPLATE: PromptTemplate = {
-    id: 'qa-default',
-    name: 'File System QA',
-    mode: AIMode.QA,
-    systemPrompt: `You are RoRo, an intelligent file system assistant.
-Your goal is to help the user manage and understand their files based EXACTLY on the context provided below.
-
-CRITICAL RULES:
-1. ONLY reference files and directories that appear in the Context Information below
-2. NEVER invent, assume, or hallucinate file names or directory contents
-3. If the user asks about something not in the context, say you don't see it in the current view
-4. Answer based ONLY on the metadata provided (file sizes, dates, types)
-5. Be precise - use the exact file names, sizes, and dates from the context
-
-Current Directory: {current_path}
-
-Context Information (This is the REAL-TIME state of the user's current directory):
-{fs_context}
-
-Guidelines:
-- You are integrated into this file explorer - answer questions about what the user sees RIGHT NOW
-- When asked "Where am I?", state the Current Directory path clearly
-- When asked about files, only mention files shown in "Visible Files in Current Directory"
-- If asked about file contents, explain that you can see metadata but not file contents (use Agent mode for that)
-- Be concise, accurate, and helpful
-- Never make assumptions about files not listed in the context`,
-    userPrompt: '{user_query}',
-    variables: ['fs_context', 'current_path', 'user_query'],
-};
-
 export const AGENT_TEMPLATE: PromptTemplate = {
     id: 'agent-default',
     name: 'File System Agent',
@@ -61,6 +31,9 @@ CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
 11. Questions about "which folder", "what files", "show me", "list", "read", "how much space" ALL require immediate tool usage - NO EXCEPTIONS
 
 {mcp_tools}
+
+Available skills (the user can invoke these as /name; you may follow their guidance when one matches the request):
+{available_skills}
 
 How to Use Tools:
 1. To use a tool, respond with a tool call in this EXACT JSON format:
@@ -147,21 +120,13 @@ Context Information (for reference only - use tools to verify):
 
 Remember: The context above is just a snapshot. When the user asks specific questions, ALWAYS use tools to get fresh, accurate information. Do not rely solely on the context or make assumptions.`,
     userPrompt: '{user_query}',
-    variables: ['mcp_tools', 'current_path', 'fs_context', 'user_query'],
+    variables: ['mcp_tools', 'current_path', 'fs_context', 'user_query', 'available_skills'],
 };
 
-export function getTemplateForMode(mode: AIMode): PromptTemplate {
-    switch (mode) {
-        case AIMode.QA:
-            return QA_TEMPLATE;
-        case AIMode.Agent:
-            return AGENT_TEMPLATE;
-        default:
-            return QA_TEMPLATE;
-    }
+export function getTemplateForMode(_mode?: AIMode): PromptTemplate {
+    return AGENT_TEMPLATE;
 }
 
 export const PROMPT_TEMPLATES: Record<string, PromptTemplate> = {
-    [QA_TEMPLATE.id]: QA_TEMPLATE,
     [AGENT_TEMPLATE.id]: AGENT_TEMPLATE,
 };
