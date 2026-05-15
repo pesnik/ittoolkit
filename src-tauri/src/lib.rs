@@ -3,8 +3,7 @@ mod commands;
 mod ai;
 mod ai_commands;
 mod cleaner;
-mod mcp;
-mod mcp_commands_native; // Native Rust MCP implementation (replaces subprocess)
+mod execute_command;
 mod system_tools;
 mod partition;
 mod partition_commands;
@@ -23,7 +22,6 @@ pub fn run() {
       Ok(())
     })
     .manage(ai_commands::InferenceState::default())
-    .manage(mcp_commands_native::NativeMCPState::new()) // Use native MCP state
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -44,11 +42,7 @@ pub fn run() {
         commands::scan_junk_with_options,
         commands::clean_junk,
         commands::clean_junk_with_options,
-        mcp_commands_native::initialize_mcp,
-        mcp_commands_native::get_mcp_tools,
-        mcp_commands_native::execute_mcp_tool,
-        mcp_commands_native::shutdown_mcp,
-        mcp_commands_native::is_mcp_initialized,
+        execute_command::execute_command,
         // System Tools
         system_tools::get_disk_info,
         system_tools::get_network_interfaces,

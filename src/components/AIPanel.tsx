@@ -38,7 +38,6 @@ import {
     getDefaultModelForMode,
 } from '@/lib/ai/ai-service';
 import { aiConfig, getDefaultEndpoint, getDefaultProvider, loadAIConfig } from '@/lib/ai/config';
-import { mcpManager } from '@/lib/ai/mcp-manager';
 import { runInferenceWithTools } from '@/lib/ai/inference-with-tools';
 import { removeToolCallTags } from '@/lib/ai/tool-calling';
 
@@ -276,26 +275,6 @@ export const AIPanel = ({
         }
 
         initialize();
-    }, []);
-
-    // Initialize MCP when switching to Agent mode or when directory changes
-    useEffect(() => {
-        async function initMCP() {
-            if (mode === AIMode.Agent && fsContext?.currentPath) {
-                const initialized = await mcpManager.ensureInitialized(fsContext.currentPath);
-                if (!initialized) {
-                    console.error('[AIPanel] Failed to initialize MCP for Agent mode');
-                }
-            }
-        }
-        initMCP();
-    }, [mode, fsContext?.currentPath]);
-
-    // Cleanup MCP on unmount
-    useEffect(() => {
-        return () => {
-            mcpManager.shutdown();
-        };
     }, []);
 
     // Update selected model when mode changes

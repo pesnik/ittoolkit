@@ -388,7 +388,7 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
         }));
     }
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model_id,
         "messages": openai_messages,
         "temperature": request.model_config.parameters.temperature,
@@ -396,6 +396,11 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
         "max_tokens": request.model_config.parameters.max_tokens,
         "stream": false,
     });
+
+    // Add tools for native function calling if provided
+    if let Some(tools) = &request.tools {
+        body["tools"] = serde_json::to_value(tools).unwrap_or_default();
+    }
 
     let url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
     let start_time = std::time::Instant::now();
@@ -421,6 +426,23 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
         .unwrap_or("")
         .to_string();
 
+    // Parse tool_calls from response if present
+    let tool_calls = data["choices"][0]["message"]["tool_calls"]
+        .as_array()
+        .map(|arr| {
+            arr.iter().filter_map(|tc| {
+                Some(crate::ai::OpenAIToolCall {
+                    id: tc["id"].as_str()?.to_string(),
+                    r#type: "function".to_string(),
+                    function: crate::ai::OpenAIToolCallFunction {
+                        name: tc["function"]["name"].as_str()?.to_string(),
+                        arguments: tc["function"]["arguments"].as_str()?.to_string(),
+                    },
+                })
+            }).collect::<Vec<_>>()
+        })
+        .filter(|v: &Vec<_>| !v.is_empty());
+
     let usage = data["usage"].as_object().map(|u| TokenUsage {
         prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         completion_tokens: u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
@@ -436,7 +458,7 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
             context_paths: None,
             is_streaming: Some(false),
             error: None,
-            tool_calls: None,
+            tool_calls,
         },
         is_complete: true,
         usage,

@@ -63,7 +63,7 @@ const MODE_CONFIG = {
     [AIMode.Agent]: {
         icon: <Bot24Regular />,
         label: 'Agent',
-        tooltip: 'AI agent with MCP filesystem tools - can read, write, search, and manage files',
+        tooltip: 'AI agent with shell command execution - can read, write, search, and manage files',
     },
 };
 

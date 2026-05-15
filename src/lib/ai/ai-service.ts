@@ -24,7 +24,40 @@ const getTransformerJS = async () => {
 };
 import { buildFileSystemContext } from './context-builder';
 import { getTemplateForMode, buildPrompt } from './prompts';
-import { mcpService } from './mcp-service';
+
+// Native function calling tool definition for execute_command
+const EXECUTE_COMMAND_TOOL = {
+    type: 'function',
+    function: {
+        name: 'execute_command',
+        description: `Execute a shell command on the file system. Use this for ALL file operations: reading, writing, searching, listing, moving, and analyzing files and directories.
+
+Use standard Unix commands: ls, cat, find, grep, du -sh, mv, cp, mkdir, rm, head, tail, wc, file, stat.
+
+For reading files: cat <path>
+For listing directories: ls -la <path>
+For searching: find <dir> -name "*pattern*"
+For directory sizes: du -sh <dir>/*`,
+        parameters: {
+            type: 'object',
+            properties: {
+                cmd: {
+                    type: 'string',
+                    description: 'The shell command to execute. Runs via sh -c "<cmd>". Use single quotes around paths to handle spaces.',
+                },
+                working_dir: {
+                    type: 'string',
+                    description: 'Working directory for the command (absolute path).',
+                },
+                timeout_secs: {
+                    type: 'number',
+                    description: 'Timeout in seconds (default: 30, max: 300).',
+                },
+            },
+            required: ['cmd', 'working_dir'],
+        },
+    },
+};
 
 // Known models registry
 export const KNOWN_MODELS: ModelConfig[] = [
@@ -283,14 +316,14 @@ export async function runInference(
     const messagesWithSystem = prepareMessages(request);
     let requestWithSystem = { ...request, messages: messagesWithSystem };
 
-    // Add native function calling tools for Agent mode (OpenAI-compatible provider only)
-    // This enables the model to use OpenAI's native function calling format instead of prompt-based tool calling
-    if (request.mode === AIMode.Agent && request.modelConfig.provider === ModelProvider.OpenAICompatible) {
-        const tools = mcpService.getToolsInOpenAIFormat();
-        if (tools.length > 0) {
-            requestWithSystem = { ...requestWithSystem, tools };
-            console.log('[ai-service] Added native function calling tools:', tools.length);
-        }
+    // Add native function calling tool for Agent mode (LlamaCpp + OpenAI-compatible)
+    // This is more reliable than prompt-based XML tool calling
+    if (request.mode === AIMode.Agent &&
+        [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)) {
+        requestWithSystem = {
+            ...requestWithSystem,
+            tools: [EXECUTE_COMMAND_TOOL],
+        };
     }
 
     // Route to appropriate provider
@@ -343,22 +376,45 @@ function prepareMessages(request: InferenceRequest): ChatMessage[] {
             ? buildFileSystemContext(request.fsContext)
             : 'No file system context available.';
 
-    // Build system prompt with MCP tools if in Agent mode
-    const mcpToolsStr = request.mode === AIMode.Agent
-        ? mcpService.formatToolsForPrompt()
+    // Build system prompt with execute_command tool description if in Agent mode
+    const executeCommandDesc = request.mode === AIMode.Agent
+        ? `## execute_command Tool
+
+You have access to the \`execute_command\` tool which runs shell commands on the user's machine.
+
+Tool: execute_command
+Description: Execute a shell command on the file system. Use this for ALL file operations including reading, writing, searching, listing, moving, and analyzing files and directories.
+Arguments:
+  - cmd (string, required): The shell command to execute. Runs via \`sh -c "<cmd>"\`.
+  - working_dir (string, required): Working directory for the command (absolute path).
+  - timeout_secs (number, optional): Timeout in seconds (default: 30, max: 300).
+
+Returns: { stdout: string, stderr: string, exit_code: number, timed_out: boolean }
+
+IMPORTANT USAGE RULES:
+- ALWAYS use this tool for ALL file operations. NEVER guess or hallucinate file contents.
+- Use standard Unix commands: \`ls\`, \`cat\`, \`find\`, \`grep\`, \`du\`, \`mv\`, \`cp\`, \`mkdir\`, \`rm\`, \`head\`, \`tail\`, \`wc\`, \`md5sum\`, \`file\`, \`stat\`
+- For reading files: \`cat <path>\` or \`head -n 100 <path>\`
+- For listing directories: \`ls -la <path>\`
+- For searching: \`find <dir> -name "*pattern*"\` or \`grep -r "pattern" <dir>\`
+- For directory sizes: \`du -sh <dir>/*\`
+- Output is capped at ~10K characters. For large outputs, use \`head\`/\`tail\` to limit.
+- The command runs in the specified working directory.
+- Default timeout is 30 seconds. Use timeout_secs for long-running operations.
+- Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.`
         : '(Tools not available in QA mode)';
 
     const systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,
         current_path: request.fsContext?.currentPath || '/',
-        mcp_tools: mcpToolsStr,
+        mcp_tools: executeCommandDesc,
     });
 
     console.log('[ai-service] System prompt built:');
     console.log('[ai-service]   Mode:', request.mode);
     console.log('[ai-service]   System prompt length:', systemPrompt.length);
     console.log('[ai-service]   System prompt preview (first 500 chars):', systemPrompt.substring(0, 500));
-    console.log('[ai-service]   MCP tools included:', mcpToolsStr.substring(0, 200));
+    console.log('[ai-service]   Execute command tool description length:', executeCommandDesc.length);
 
     // Check if system message already exists
     const systemMessageIndex = request.messages.findIndex(
