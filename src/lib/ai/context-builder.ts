@@ -54,7 +54,7 @@ export function buildFileSystemContext(context: FileSystemContext): string {
             const date = new Date(file.lastModified * 1000).toLocaleDateString();
             if (file.isDir) {
                 const countStr = file.fileCount !== undefined ? `, ${file.fileCount} items` : '';
-                parts.push(`- ${file.name}/ (Folder${countStr}, Modified: ${date})`);
+                parts.push(`- ${file.name}/ (Folder${countStr}, Size: ${formatFileSize(file.size)}, Modified: ${date})`);
             } else {
                 parts.push(`- ${file.name} (Size: ${formatFileSize(file.size)}, Modified: ${date})`);
             }
