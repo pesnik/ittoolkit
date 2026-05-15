@@ -402,6 +402,89 @@ export function AISettingsPanel({
         }
     };
 
+    // --- Preview panel derived values ---
+    const isRemoteProvider = activeProvider === ModelProvider.OpenAICompatible;
+
+    const providerLabel = (() => {
+        switch (activeProvider) {
+            case ModelProvider.TransformerJS: return 'Transformer.js';
+            case ModelProvider.Ollama: return 'Ollama';
+            case ModelProvider.LlamaCpp: return 'llama.cpp';
+            case ModelProvider.MLX: return 'MLX';
+            case ModelProvider.OpenAICompatible: return 'OpenAI-compatible';
+            default: return 'No provider selected';
+        }
+    })();
+
+    const locality = (() => {
+        switch (activeProvider) {
+            case ModelProvider.TransformerJS: return 'In-browser';
+            case ModelProvider.Ollama: return 'Local server';
+            case ModelProvider.LlamaCpp: return 'Local (native)';
+            case ModelProvider.MLX: return 'Local (Apple Silicon)';
+            case ModelProvider.OpenAICompatible: return 'Remote';
+            default: return 'Unknown';
+        }
+    })();
+
+    const whereItRuns = (() => {
+        switch (activeProvider) {
+            case ModelProvider.TransformerJS:
+                return 'Runs inside this browser tab using WebGPU/WASM. No external services involved.';
+            case ModelProvider.Ollama:
+                return `Calls a local Ollama server on this machine${customEndpoint ? ` (${customEndpoint}).` : '.'}`;
+            case ModelProvider.LlamaCpp:
+                return 'Runs as a bundled llama.cpp process on this machine.';
+            case ModelProvider.MLX:
+                return 'Runs natively on Apple Silicon via MLX.';
+            case ModelProvider.OpenAICompatible:
+                return `Sends requests to an external OpenAI-compatible API${customEndpoint ? ` (${customEndpoint}).` : '.'}`;
+            default:
+                return 'Pick a provider on the left to see how it runs.';
+        }
+    })();
+
+    const privacyText = (() => {
+        if (activeProvider === ModelProvider.OpenAICompatible) {
+            let host = 'the configured endpoint';
+            try {
+                if (customEndpoint) host = new URL(customEndpoint).host;
+            } catch {
+                // keep fallback
+            }
+            return `Prompts and file context are sent to ${host}. Treat as you would any third-party API.`;
+        }
+        if (activeProvider === ModelProvider.TransformerJS) {
+            return 'Everything stays in this browser tab — nothing is sent over the network.';
+        }
+        return 'Everything stays on your device — nothing is sent over the network.';
+    })();
+
+    const storagePath = (() => {
+        switch (activeProvider) {
+            case ModelProvider.TransformerJS: return 'Browser cache (IndexedDB)';
+            case ModelProvider.Ollama: return '~/.ollama/models';
+            case ModelProvider.LlamaCpp: return '<app data>/ittoolkit/models';
+            case ModelProvider.MLX: return '~/.cache/huggingface';
+            case ModelProvider.OpenAICompatible: return 'Hosted by provider — nothing stored locally';
+            default: return '—';
+        }
+    })();
+
+    const temperatureLabel = params.temperature < 0.4
+        ? { label: 'Precise', desc: 'Focused, deterministic answers — good for code and structured output.' }
+        : params.temperature > 0.8
+            ? { label: 'Creative', desc: 'Varied, exploratory answers — good for brainstorming and prose.' }
+            : { label: 'Balanced', desc: 'Natural and reliable — a safe default for most tasks.' };
+
+    const topPLabel = params.topP < 0.5
+        ? 'Focused — picks from a narrow set of likely words.'
+        : params.topP > 0.95
+            ? 'Broad — considers a wide range of word choices.'
+            : 'Standard sampling — the typical range for chat models.';
+
+    const approxWords = Math.round(params.maxTokens * 0.75);
+
     return (
         <Dialog open={open} onOpenChange={(event, data) => !data.open && onClose()}>
             <DialogSurface className={styles.dialogSurface}>
@@ -688,43 +771,139 @@ export function AISettingsPanel({
 
                             {/* RIGHT COLUMN: PREVIEW PANEL */}
                             <div className={styles.previewColumn}>
-                                <Text weight="semibold" size={400}>Preview Panel</Text>
+                                <Text weight="semibold" size={400}>Preview</Text>
+                                <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '-8px' }}>
+                                    A live summary of the choices on the left.
+                                </Text>
 
+                                {/* Active model — always shown */}
                                 <div>
-                                    <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Recommended for:</Label>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                        {modelConfig.recommendedFor.map(mode => (
-                                            <Text key={mode} weight="medium">Agent Mode</Text>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <Divider />
-
-                                <div>
-                                    <Label size="small" style={{ color: tokens.colorNeutralForeground2, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <CubeRegular /> System Requirements
-                                    </Label>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                        <Text size={200}>RAM: {modelConfig.sizeBytes ? `${Math.ceil(modelConfig.sizeBytes / 1e9 + 2)}GB+` : '8GB+'}</Text>
-                                        <Text size={200}>GPU: Recommended</Text>
-                                        <Text size={200}>VRAM: 4GB+</Text>
-                                    </div>
-                                </div>
-
-                                <Divider />
-
-                                <div>
-                                    <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Storage Location</Label>
-                                    <Text size={200} block style={{
-                                        fontFamily: tokens.fontFamilyMonospace,
-                                        marginTop: '4px',
-                                        wordBreak: 'break-all',
-                                        color: tokens.colorNeutralForeground2
-                                    }}>
-                                        {modelConfig.provider === 'transformerjs' ? 'Browser Cache (IndexedDB)' : '~/.ollama/models'}
+                                    <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Active Model</Label>
+                                    <Text weight="semibold" block style={{ marginTop: '4px' }}>
+                                        {activeProvider === ModelProvider.OpenAICompatible
+                                            ? (customModelName || 'Custom model')
+                                            : modelConfig.name}
                                     </Text>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+                                            {providerLabel}
+                                        </Text>
+                                        <Badge appearance="tint" color={isRemoteProvider ? 'warning' : 'success'} size="small">
+                                            {locality}
+                                        </Badge>
+                                    </div>
                                 </div>
+
+                                <Divider />
+
+                                {/* Tab-specific content */}
+                                {selectedTab === 'general' && (
+                                    <>
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Where it runs</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>{whereItRuns}</Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Privacy</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>{privacyText}</Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>
+                                                {isRemoteProvider ? 'Model storage' : 'Storage location'}
+                                            </Label>
+                                            <Text size={200} block style={{
+                                                fontFamily: tokens.fontFamilyMonospace,
+                                                marginTop: '4px',
+                                                wordBreak: 'break-all',
+                                                color: tokens.colorNeutralForeground2,
+                                            }}>
+                                                {storagePath}
+                                            </Text>
+                                            {!isRemoteProvider && modelConfig.sizeBytes && (
+                                                <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '4px', display: 'block' }}>
+                                                    ~{(modelConfig.sizeBytes / 1e9).toFixed(1)}GB on disk · ~{Math.ceil(modelConfig.sizeBytes / 1e9 + 2)}GB RAM to load
+                                                </Text>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+
+                                {selectedTab === 'parameters' && (
+                                    <>
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Response style</Label>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                                                <Text weight="medium">{temperatureLabel.label}</Text>
+                                                <Badge appearance="outline" size="small">temp {params.temperature.toFixed(1)}</Badge>
+                                            </div>
+                                            <Text size={200} block style={{ color: tokens.colorNeutralForeground3, marginTop: '2px' }}>
+                                                {temperatureLabel.desc}
+                                            </Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Word choice</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>{topPLabel}</Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Reply length</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Up to {params.maxTokens.toLocaleString()} tokens (~{approxWords.toLocaleString()} words)
+                                            </Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Streaming</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                {params.stream ? 'On — tokens stream as they are generated.' : 'Off — replies arrive all at once.'}
+                                            </Text>
+                                        </div>
+                                    </>
+                                )}
+
+                                {selectedTab === 'skills' && (
+                                    <>
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>About skills</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Skills are reusable prompts the agent can invoke as tools. Enable the ones you want available; disable the rest to keep the agent focused.
+                                            </Text>
+                                        </div>
+
+                                        <Divider />
+
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Trusted vs untrusted</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Trusted skills run without confirmation. Untrusted skills prompt before each run — review their source first.
+                                            </Text>
+                                        </div>
+                                    </>
+                                )}
+
+                                {selectedTab === 'advanced' && (
+                                    <>
+                                        <div>
+                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Advanced settings</Label>
+                                            <Text size={200} block style={{ marginTop: '4px' }}>
+                                                Lower-level controls for power users — stop sequences, context window, and provider-specific overrides will appear here.
+                                            </Text>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     </DialogContent>
