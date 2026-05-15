@@ -6,7 +6,7 @@
  * Main AI panel that integrates chat, mode selector, and model selector.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     makeStyles,
     tokens,
@@ -81,6 +81,48 @@ const useStyles = makeStyles({
         height: '100%',
         ...shorthands.gap('12px'),
     },
+    confirmOverlay: {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+    },
+    confirmDialog: {
+        backgroundColor: tokens.colorNeutralBackground1,
+        ...shorthands.borderRadius('12px'),
+        ...shorthands.padding('24px'),
+        maxWidth: '500px',
+        width: '90%',
+        display: 'flex',
+        flexDirection: 'column',
+        ...shorthands.gap('16px'),
+        boxShadow: tokens.shadow64,
+    },
+    confirmTitle: {
+        fontSize: '16px',
+        fontWeight: 600,
+    },
+    confirmCommand: {
+        backgroundColor: tokens.colorNeutralBackground2,
+        ...shorthands.padding('12px'),
+        ...shorthands.borderRadius('8px'),
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
+    },
+    confirmActions: {
+        display: 'flex',
+        justifyContent: 'flex-end',
+        ...shorthands.gap('8px'),
+    },
 });
 
 interface AIPanelProps {
@@ -113,6 +155,13 @@ export const AIPanel = ({
 
     // Download state
     const [downloadProgress, setDownloadProgress] = useState<{ status: string; progress: number; modelId: string } | undefined>(undefined);
+
+    // Confirmation dialog for destructive commands
+    const [pendingConfirmation, setPendingConfirmation] = useState<{
+        cmd: string;
+        resolve: (value: boolean) => void;
+    } | null>(null);
+    const rejectConfirmRef = useRef<(() => void) | null>(null);
 
     const handleDownloadModel = async (modelId: string, provider: ModelProvider) => {
         if (provider !== ModelProvider.LlamaCpp) return;
@@ -334,6 +383,12 @@ export const AIPanel = ({
     };
 
     const handleStopGeneration = async () => {
+        // Dismiss any pending confirmation dialog
+        if (rejectConfirmRef.current) {
+            rejectConfirmRef.current();
+            rejectConfirmRef.current = null;
+        }
+
         if (currentSessionId) {
             try {
                 await invoke('cancel_inference', { sessionId: currentSessionId });
@@ -395,6 +450,7 @@ export const AIPanel = ({
         setCurrentSessionId(sessionId);
 
         let downloadMsgId = '';
+        let confirmCancelled = false;
 
         const toolExecutions: ToolExecutionData[] = [];
 
@@ -552,7 +608,13 @@ export const AIPanel = ({
                         ));
                     } : undefined,
                     onToolExecution: (event) => {
-                        if (event.result || event.error) {
+                        if (event.cancelled) {
+                            const existing = toolExecutions.find(e => e.toolName === event.toolName && e.status === 'executing');
+                            if (existing) {
+                                existing.status = 'cancelled';
+                                existing.result = event.result;
+                            }
+                        } else if (event.result || event.error) {
                             const existing = toolExecutions.find(e => e.toolName === event.toolName);
                             if (existing) {
                                 existing.status = event.error ? 'error' as const : 'success' as const;
@@ -573,6 +635,18 @@ export const AIPanel = ({
                                 ? { ...msg, toolExecutions: [...toolExecutions], isStreaming: true }
                                 : msg
                         ));
+                    },
+                    isCancelled: () => confirmCancelled,
+                    onConfirmExecution: async (_toolName, args) => {
+                        const cmd = (args?.cmd as string) || '';
+                        return new Promise<boolean>((resolve) => {
+                            rejectConfirmRef.current = () => {
+                                confirmCancelled = true;
+                                resolve(false);
+                                setPendingConfirmation(null);
+                            };
+                            setPendingConfirmation({ cmd, resolve });
+                        });
                     },
                     onProgress,
                 })
@@ -836,6 +910,39 @@ export const AIPanel = ({
                     downloadProgress={downloadProgress}
                     onDownloadModel={handleDownloadModel}
                 />
+            )}
+
+            {/* Confirmation dialog for destructive commands */}
+            {pendingConfirmation && (
+                <div className={styles.confirmOverlay}>
+                    <div className={styles.confirmDialog}>
+                        <div className={styles.confirmTitle}>Confirm Destructive Command</div>
+                        <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+                            The AI wants to execute a potentially destructive command:
+                        </Text>
+                        <div className={styles.confirmCommand}>{pendingConfirmation.cmd}</div>
+                        <div className={styles.confirmActions}>
+                            <Button
+                                appearance="secondary"
+                                onClick={() => {
+                                    pendingConfirmation.resolve(false);
+                                    setPendingConfirmation(null);
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                appearance="primary"
+                                onClick={() => {
+                                    pendingConfirmation.resolve(true);
+                                    setPendingConfirmation(null);
+                                }}
+                            >
+                                Confirm
+                            </Button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

@@ -85,7 +85,7 @@ export interface ToolExecutionData {
     result?: string;
     error?: string;
     executionTimeMs?: number;
-    status: 'executing' | 'success' | 'error';
+    status: 'executing' | 'success' | 'error' | 'cancelled';
 }
 
 /**

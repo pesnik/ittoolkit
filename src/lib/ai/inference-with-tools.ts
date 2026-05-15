@@ -11,13 +11,21 @@ export interface ToolExecutionEvent {
     result?: string;
     error?: string;
     executionTimeMs?: number;
+    cancelled?: boolean;
 }
 
 export interface InferenceWithToolsOptions {
     onChunk?: (chunk: string) => void;
     onToolExecution?: (event: ToolExecutionEvent) => void;
     onProgress?: (progress: any) => void;
+    onConfirmExecution?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>;
+    isCancelled?: () => boolean;
 }
+
+const DESTRUCTIVE_PATTERNS = [
+    /^rm\s+/,
+    /^mv\s+/,
+];
 
 interface ExecuteCommandResponse {
     stdout: string;
@@ -68,7 +76,7 @@ export async function runInferenceWithTools(
     request: InferenceRequest,
     options: InferenceWithToolsOptions = {}
 ): Promise<InferenceResponse> {
-    const { onChunk, onToolExecution, onProgress } = options;
+    const { onChunk, onToolExecution, onProgress, onConfirmExecution, isCancelled } = options;
 
     let currentRequest = { ...request };
     let iterations = 0;
@@ -76,6 +84,9 @@ export async function runInferenceWithTools(
     const allToolExecutions: ToolExecutionData[] = [];
 
     while (iterations < MAX_TOOL_ITERATIONS) {
+        if (isCancelled?.()) {
+            throw new Error('Inference cancelled');
+        }
         iterations++;
 
         const response = await runInference(currentRequest, onChunk, onProgress);
@@ -110,18 +121,56 @@ export async function runInferenceWithTools(
             try {
                 const startTime = Date.now();
 
-                const toolExecution: ToolExecutionData = {
-                    toolName: toolCall.name,
-                    arguments: toolCall.arguments,
-                    status: 'executing',
-                };
-
                 if (onToolExecution) {
                     onToolExecution({
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
                     });
                 }
+
+                const cmd = (toolCall.arguments?.cmd as string) || '';
+                const needsConfirm = onConfirmExecution &&
+                    toolCall.name === 'execute_command' &&
+                    DESTRUCTIVE_PATTERNS.some(p => p.test(cmd));
+
+                if (needsConfirm) {
+                    const confirmed = await onConfirmExecution(toolCall.name, toolCall.arguments);
+                    if (isCancelled?.()) {
+                        throw new Error('Inference cancelled');
+                    }
+                    if (!confirmed) {
+                        const cancelledExecution: ToolExecutionData = {
+                            toolName: toolCall.name,
+                            arguments: toolCall.arguments,
+                            status: 'cancelled',
+                            result: 'Cancelled by user',
+                        };
+                        allToolExecutions.push(cancelledExecution);
+
+                        if (onToolExecution) {
+                            onToolExecution({
+                                toolName: toolCall.name,
+                                arguments: toolCall.arguments,
+                                result: 'Cancelled by user',
+                                cancelled: true,
+                            });
+                        }
+
+                        toolResults.push({
+                            id: `tool-cancelled-${Date.now()}-${toolCall.id}`,
+                            role: MessageRole.User,
+                            content: formatToolResult(toolCall.name, 'Cancelled by user', false),
+                            timestamp: Date.now(),
+                        });
+                        continue;
+                    }
+                }
+
+                const toolExecution: ToolExecutionData = {
+                    toolName: toolCall.name,
+                    arguments: toolCall.arguments,
+                    status: 'executing',
+                };
 
                 const result = await executeTool(toolCall);
                 const executionTimeMs = Date.now() - startTime;

@@ -105,7 +105,7 @@ export interface ToolExecutionData {
     result?: string;
     error?: string;
     executionTimeMs?: number;
-    status: 'executing' | 'success' | 'error';
+    status: 'executing' | 'success' | 'error' | 'cancelled';
 }
 
 interface ToolCallDisplayProps {
@@ -124,6 +124,8 @@ export function ToolCallDisplay({ execution }: ToolCallDisplayProps) {
                 return <CheckmarkCircle16Regular className={styles.statusIcon} style={{ color: tokens.colorPaletteGreenForeground1 }} />;
             case 'error':
                 return <ErrorCircle16Regular className={styles.statusIcon} style={{ color: tokens.colorPaletteRedForeground1 }} />;
+            case 'cancelled':
+                return <ErrorCircle16Regular className={styles.statusIcon} style={{ color: tokens.colorPaletteYellowForeground1 }} />;
         }
     };
 
@@ -135,20 +137,64 @@ export function ToolCallDisplay({ execution }: ToolCallDisplayProps) {
                 return execution.executionTimeMs ? `Completed in ${execution.executionTimeMs}ms` : 'Completed';
             case 'error':
                 return 'Failed';
+            case 'cancelled':
+                return 'Cancelled';
         }
     };
 
-    const getToolDisplayName = (toolName: string): string => {
-        // Convert tool names to human-readable format
-        const nameMap: Record<string, string> = {
-            'read_file': 'Read File',
-            'list_directory': 'List Directory',
-            'search_files': 'Search Files',
-            'write_file': 'Write File',
-            'execute_command': 'Execute Command',
-            'get_file_info': 'Get File Info',
-        };
-        return nameMap[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    function getCommandIntent(cmd: string): string {
+        const trimmed = cmd.trim();
+        const firstWord = trimmed.split(/\s+/)[0] || '';
+
+        const patterns: [RegExp, (m: RegExpMatchArray) => string][] = [
+            [/^cat\s+(.+)/, (m) => `Read file: ${m[1].split(/\s+/)[0]}`],
+            [/^ls\s+(.+)/, (m) => `List directory: ${m[1].split(/\s+/)[0]}`],
+            [/^ls\b/, () => 'List directory contents'],
+            [/^find\s/, () => 'Search for files'],
+            [/^grep\s/, () => 'Search file contents'],
+            [/^rm\s+(.+)/, (m) => `Remove file: ${m[1].split(/\s+/)[0]}`],
+            [/^mv\s+(.+)/, (m) => `Move/rename: ${m[1].split(/\s+/)[0]}`],
+            [/^cp\s+(.+)/, (m) => `Copy: ${m[1].split(/\s+/)[0]}`],
+            [/^mkdir\s+(.+)/, (m) => `Create directory: ${m[1].split(/\s+/)[0]}`],
+            [/^echo\s/, () => trimmed.includes('>') ? 'Write to file' : 'Output text'],
+            [/^du\s/, () => 'Check disk usage'],
+            [/^df\s/, () => 'Check disk space'],
+            [/^pwd\b/, () => 'Show current directory'],
+            [/^which\s+(.+)/, (m) => `Locate: ${m[1]}`],
+            [/^uname\b/, () => 'Show system info'],
+            [/^whoami\b/, () => 'Show current user'],
+            [/^head\s+(.+)/, (m) => `Read start: ${m[1].split(/\s+/)[0]}`],
+            [/^tail\s+(.+)/, (m) => `Read end: ${m[1].split(/\s+/)[0]}`],
+            [/^wc\s+(.+)/, (m) => `Count: ${m[1].split(/\s+/)[0]}`],
+            [/^sort\s+(.+)/, (m) => `Sort file: ${m[1].split(/\s+/)[0]}`],
+            [/^diff\s/, () => 'Compare files'],
+            [/^chmod\s/, () => 'Change permissions'],
+            [/^file\s+(.+)/, (m) => `Identify: ${m[1].split(/\s+/)[0]}`],
+            [/^stat\s+(.+)/, (m) => `Details: ${m[1].split(/\s+/)[0]}`],
+        ];
+
+        for (const [pattern, handler] of patterns) {
+            const match = trimmed.match(pattern);
+            if (match) return handler(match);
+        }
+
+        return `Execute: ${firstWord}`;
+    }
+
+    const getIntentLabel = (): string => {
+        if (execution.toolName !== 'execute_command') {
+            const nameMap: Record<string, string> = {
+                'read_file': 'Read File',
+                'list_directory': 'List Directory',
+                'search_files': 'Search Files',
+                'write_file': 'Write File',
+                'get_file_info': 'Get File Info',
+            };
+            return nameMap[execution.toolName] || execution.toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+        const cmd = execution.arguments?.cmd as string;
+        if (cmd) return getCommandIntent(cmd);
+        return 'Execute Command';
     };
 
     const formatArguments = (args: Record<string, unknown>): string => {
@@ -171,7 +217,7 @@ export function ToolCallDisplay({ execution }: ToolCallDisplayProps) {
                         <Wrench16Regular />
                     </div>
                     <Text weight="semibold" size={300}>
-                        Used {getToolDisplayName(execution.toolName)}
+                        {getIntentLabel()}
                     </Text>
                     {getStatusIcon()}
                     <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
