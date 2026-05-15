@@ -173,6 +173,7 @@ export function AISettingsPanel({
     });
     const [customEndpoint, setCustomEndpoint] = React.useState<string>('');
     const [customModelName, setCustomModelName] = React.useState<string>('');
+    const [apiKey, setApiKey] = React.useState<string>('');
 
     // Load config on mount to get the correct default endpoints
     React.useEffect(() => {
@@ -195,6 +196,10 @@ export function AISettingsPanel({
             const savedModelName = localStorage.getItem('customModelName_openaiCompatible');
             if (savedModelName) {
                 setCustomModelName(savedModelName);
+            }
+            const savedApiKey = localStorage.getItem('defaultAIKey_openaiCompatible');
+            if (savedApiKey) {
+                setApiKey(savedApiKey);
             }
         }
     }, [activeProvider]);
@@ -306,7 +311,13 @@ export function AISettingsPanel({
                 ...modelConfig,
                 ...(activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama
                     ? { endpoint: customEndpoint, provider: activeProvider }
-                    : {})
+                    : {}),
+                ...(activeProvider === ModelProvider.OpenAICompatible && apiKey
+                    ? { apiKey }
+                    : {}),
+                ...(activeProvider === ModelProvider.OpenAICompatible
+                    ? { modelId: customModelName || 'gpt-4o' }
+                    : {}),
             };
 
             let streamedResponse = '';
@@ -468,63 +479,43 @@ export function AISettingsPanel({
                                                     </Text>
                                                 </div>
                                             )}
+
+                                            {/* API Key for OpenAI-compatible */}
+                                            {activeProvider === 'openai-compatible' && (
+                                                <div style={{ marginTop: '12px' }}>
+                                                    <Label size="small">API Key</Label>
+                                                    <Input
+                                                        type="password"
+                                                        value={apiKey}
+                                                        onChange={(e) => setApiKey(e.target.value)}
+                                                        placeholder="sk-or-v1-..."
+                                                        style={{ width: '100%', marginTop: '4px' }}
+                                                    />
+                                                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                                        Required by some providers (OpenRouter, etc.). Leave blank if not needed.
+                                                    </Text>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div>
                                             <Label weight="semibold" className={styles.sectionTitle}>
                                                 Available Models {activeProvider && `(${activeProvider})`}
                                             </Label>
-                                            {activeProvider === ModelProvider.OpenAICompatible && displayModels.length === 0 ? (
+                                            {activeProvider === ModelProvider.OpenAICompatible ? (
                                                 <div>
-                                                    <Text block style={{ marginBottom: '12px', fontWeight: 600 }}>
-                                                        Select a Model Configuration
-                                                    </Text>
-                                                    <div className={styles.cardGrid}>
-                                                        <div
-                                                            className={`${styles.modelCard} ${customModelName === 'unified-mode' ? styles.selectedCard : ''}`}
-                                                            onClick={() => setCustomModelName('unified-mode')}
-                                                        >
-                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                                <CubeRegular />
-                                                            </div>
-                                                            <Text weight="semibold">Unified Mode</Text>
-                                                            <div className={styles.badgeRow}>
-                                                                <Badge appearance="tint" color="brand">Auto-detect</Badge>
-                                                            </div>
-                                                            <Text size={200} style={{ color: tokens.colorNeutralForeground2, marginTop: '8px' }}>
-                                                                Server determines model automatically
-                                                            </Text>
-                                                        </div>
-                                                        <div
-                                                            className={`${styles.modelCard} ${customModelName === 'openai-compatible-generic' ? styles.selectedCard : ''}`}
-                                                            onClick={() => setCustomModelName('openai-compatible-generic')}
-                                                        >
-                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                                <CubeRegular />
-                                                            </div>
-                                                            <Text weight="semibold">OpenAI Compatible Generic</Text>
-                                                            <div className={styles.badgeRow}>
-                                                                <Badge appearance="tint" color="success">Manual</Badge>
-                                                            </div>
-                                                            <Text size={200} style={{ color: tokens.colorNeutralForeground2, marginTop: '8px' }}>
-                                                                Specify custom model name
-                                                            </Text>
-                                                        </div>
+                                                    <div style={{ marginTop: '8px', padding: '16px', backgroundColor: tokens.colorNeutralBackground2, borderRadius: '8px' }}>
+                                                        <Label size="small">Model Name</Label>
+                                                        <Input
+                                                            value={customModelName}
+                                                            onChange={(e) => setCustomModelName(e.target.value)}
+                                                            placeholder="Enter model name (e.g., gpt-4o, claude-sonnet-4, openai/gpt-4o)"
+                                                            style={{ width: '100%', marginTop: '4px' }}
+                                                        />
+                                                        <Text block size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '8px' }}>
+                                                            This name will be sent as the model identifier to the OpenAI-compatible server
+                                                        </Text>
                                                     </div>
-                                                    {customModelName && (
-                                                        <div style={{ marginTop: '16px', padding: '16px', backgroundColor: tokens.colorNeutralBackground2, borderRadius: '8px' }}>
-                                                            <Label size="small">Model Name</Label>
-                                                            <Input
-                                                                value={customModelName}
-                                                                onChange={(e) => setCustomModelName(e.target.value)}
-                                                                placeholder="Enter model name (e.g., gpt-4, llama-3-8b)"
-                                                                style={{ width: '100%', marginTop: '4px' }}
-                                                            />
-                                                            <Text block size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: '8px' }}>
-                                                                This name will be sent to the OpenAI-compatible server
-                                                            </Text>
-                                                        </div>
-                                                    )}
                                                     <div style={{ padding: '20px', color: tokens.colorNeutralForeground3, marginTop: '16px' }}>
                                                         <Text block style={{ marginBottom: '12px', fontWeight: 600 }}>
                                                             Setup Instructions
@@ -533,13 +524,19 @@ export function AISettingsPanel({
                                                             1. Set your base URL above (must end with <code>/v1</code>)
                                                         </Text>
                                                         <Text block size={200} style={{ marginBottom: '8px', marginLeft: '16px', color: tokens.colorNeutralForeground4 }}>
-                                                            Example: <code>http://127.0.0.1:8033/v1</code> for llama-server
+                                                            Example: <code>https://openrouter.ai/api/v1</code>
                                                         </Text>
                                                         <Text block size={200} style={{ marginBottom: '12px' }}>
-                                                            2. Select a model configuration above
+                                                            2. Enter your API key if required (e.g., OpenRouter, OpenAI)
+                                                        </Text>
+                                                        <Text block size={200} style={{ marginBottom: '8px', marginLeft: '16px', color: tokens.colorNeutralForeground4 }}>
+                                                            Example: <code>sk-or-v1-...</code>
+                                                        </Text>
+                                                        <Text block size={200} style={{ marginBottom: '12px' }}>
+                                                            3. Type the model name above (e.g., <code>openai/gpt-4o</code>)
                                                         </Text>
                                                         <Text block size={200}>
-                                                            3. Use the &quot;Test Inference&quot; button below to verify the connection
+                                                            4. Use the &quot;Test Inference&quot; button below to verify the connection
                                                         </Text>
                                                     </div>
                                                 </div>
@@ -814,6 +811,13 @@ export function AISettingsPanel({
                                                 : 'defaultAIEndpoint_ollama';
                                             localStorage.setItem(endpointKey, customEndpoint);
                                         }
+                                        if (activeProvider === ModelProvider.OpenAICompatible) {
+                                            if (apiKey) {
+                                                localStorage.setItem('defaultAIKey_openaiCompatible', apiKey);
+                                            } else {
+                                                localStorage.removeItem('defaultAIKey_openaiCompatible');
+                                            }
+                                        }
                                         setIsDefault(true);
                                     }
                                 }}
@@ -837,6 +841,14 @@ export function AISettingsPanel({
                             // Save custom model name for OpenAI-compatible
                             if (activeProvider === ModelProvider.OpenAICompatible && customModelName) {
                                 localStorage.setItem('customModelName_openaiCompatible', customModelName);
+                            }
+                            // Save API key for OpenAI-compatible
+                            if (activeProvider === ModelProvider.OpenAICompatible) {
+                                if (apiKey) {
+                                    localStorage.setItem('defaultAIKey_openaiCompatible', apiKey);
+                                } else {
+                                    localStorage.removeItem('defaultAIKey_openaiCompatible');
+                                }
                             }
                             onClose();
                         }} icon={<Save24Regular />}>

@@ -1,14 +1,9 @@
 'use client';
 
-/**
- * Model Selector Component
- * 
- * Dropdown for selecting AI models.
- */
-
 import React from 'react';
 import {
     Dropdown,
+    Combobox,
     Option,
     makeStyles,
     tokens,
@@ -32,6 +27,20 @@ const useStyles = makeStyles({
             '&:hover': {
                 backgroundColor: '#333333',
             },
+        },
+    },
+    combobox: {
+        minWidth: '150px',
+        backgroundColor: '#2a2a2a',
+        ...shorthands.borderRadius('6px'),
+        color: '#ffffff',
+        ...shorthands.border('1px', 'solid', '#3a3a3a'),
+        '& input': {
+            backgroundColor: '#2a2a2a',
+            color: '#ffffff',
+        },
+        '&:hover': {
+            backgroundColor: '#333333',
         },
     },
     optionContent: {
@@ -111,11 +120,56 @@ export function ModelSelector({
     const styles = useStyles();
 
     const selectedModel = models.find((m) => m.id === selectedModelId);
+    const isByok = activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama;
 
-    // Show provider name in placeholder if filtering
     const placeholder = activeProvider
         ? `Select ${getProviderDisplayName(activeProvider)} model`
         : 'Select a model';
+
+    if (isByok) {
+        return (
+            <Combobox
+                className={styles.combobox}
+                placeholder={placeholder}
+                value={selectedModel?.name || localStorage.getItem('customModelName_openaiCompatible') || ''}
+                selectedOptions={selectedModelId ? [selectedModelId] : []}
+                onOptionSelect={(_, data) => {
+                    if (data.optionValue) {
+                        onModelChange(data.optionValue);
+                    }
+                }}
+                onChange={(e) => {
+                    if (e.target.value && e.target.value.trim()) {
+                        onModelChange(e.target.value);
+                    }
+                }}
+                freeform
+                disabled={disabled}
+            >
+                {models.map((model) => (
+                    <Option key={model.id} value={model.id} text={model.name}>
+                        <div className={styles.optionContent}>
+                            <div className={styles.modelInfo}>
+                                <Text weight="semibold">{model.name}</Text>
+                                {model.sizeBytes && (
+                                    <Text className={styles.modelSize}>
+                                        {formatFileSize(model.sizeBytes)}
+                                    </Text>
+                                )}
+                            </div>
+                            <Badge
+                                size="small"
+                                appearance="tint"
+                                color={getProviderBadgeColor(model.provider)}
+                            >
+                                {model.provider}
+                            </Badge>
+                        </div>
+                    </Option>
+                ))}
+            </Combobox>
+        );
+    }
 
     return (
         <Dropdown

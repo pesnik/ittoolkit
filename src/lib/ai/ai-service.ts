@@ -63,6 +63,17 @@ export const KNOWN_MODELS: ModelConfig[] = [
         id: 'llamacpp-qwen3b', name: 'Qwen 2.5 VL 3B (Q4_K_M)', provider: ModelProvider.LlamaCpp, isAvailable: false,
         modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
         recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: 2.0e9
+    },
+    // OpenAI-compatible - Generic entries for BYOK providers (OpenRouter, etc.)
+    {
+        id: 'openai-compatible-generic', name: 'OpenAI Compatible (Custom)', provider: ModelProvider.OpenAICompatible, isAvailable: true,
+        modelId: 'openai-compatible-generic', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
+        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: undefined
+    },
+    {
+        id: 'unified-mode', name: 'Unified Mode (Auto-detect)', provider: ModelProvider.OpenAICompatible, isAvailable: true,
+        modelId: 'unified-mode', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
+        recommendedFor: [AIMode.QA, AIMode.Agent], sizeBytes: undefined
     }
 ];
 
@@ -171,7 +182,30 @@ export async function getProvidersStatus(): Promise<ProviderStatus[]> {
             ],
         };
 
-        return [transformerJSStatus, ...backendStatuses];
+        // Add OpenAI-Compatible KNOWN_MODELS so they appear in availableModels
+        // (needed for provider switching to find models to select)
+        const openAICompatibleStatus: ProviderStatus = {
+            provider: ModelProvider.OpenAICompatible,
+            isAvailable: true,
+            version: undefined,
+            availableModels: KNOWN_MODELS.filter(m => m.provider === ModelProvider.OpenAICompatible).map(m => ({
+                ...m,
+                endpoint: config.endpoints.openaiCompatible,
+            })),
+        };
+
+        // Add LlamaCpp KNOWN_MODELS for the model library (installed models come from backend)
+        const llamacppStatus = backendStatuses.find(p => p.provider.toLowerCase() === ModelProvider.LlamaCpp.toLowerCase());
+        if (llamacppStatus) {
+            const installedLcIds = new Set(llamacppStatus.availableModels.map(m => m.modelId));
+            KNOWN_MODELS.forEach(known => {
+                if (known.provider === ModelProvider.LlamaCpp && !installedLcIds.has(known.modelId)) {
+                    llamacppStatus.availableModels.push(known);
+                }
+            });
+        }
+
+        return [transformerJSStatus, openAICompatibleStatus, ...backendStatuses];
     } catch (error) {
         console.error('Failed to get provider status:', error);
         return [];

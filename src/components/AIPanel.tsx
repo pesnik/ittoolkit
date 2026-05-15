@@ -419,10 +419,6 @@ export const AIPanel = ({
         try {
             const selectedModel = availableModels.find((m) => m.id === selectedModelId);
 
-            if (!selectedModel) {
-                throw new Error('No model selected');
-            }
-
             // Enable streaming for all providers (Candle + Ollama)
             // Ideally we check if modelConfig.parameters.stream is true, but we know our backend implementations stream.
             const isStreaming = true;
@@ -443,6 +439,7 @@ export const AIPanel = ({
             // Priority: 1) localStorage (user custom endpoint), 2) model config (from runtime config/backend), 3) runtime config fallback
             let endpointToUse: string | undefined;
             let customModelName: string | undefined;
+            let apiKey: string | undefined;
             if (activeProvider === ModelProvider.OpenAICompatible || activeProvider === ModelProvider.Ollama) {
                 // CRITICAL FIX: Use activeProvider (current state) instead of selectedModel.provider (can be stale)
                 // This prevents race conditions when user switches providers and immediately sends a message
@@ -450,31 +447,53 @@ export const AIPanel = ({
                     ? 'defaultAIEndpoint_openaiCompatible'
                     : 'defaultAIEndpoint_ollama';
                 endpointToUse = localStorage.getItem(endpointKey) ||
-                    selectedModel.endpoint ||
+                    selectedModel?.endpoint ||
                     await getDefaultEndpoint(activeProvider);
 
-                // Load custom model name for OpenAI-compatible
+                // Load custom model name and API key for OpenAI-compatible
                 if (activeProvider === ModelProvider.OpenAICompatible) {
                     customModelName = localStorage.getItem('customModelName_openaiCompatible') || undefined;
+                    apiKey = localStorage.getItem('defaultAIKey_openaiCompatible') || undefined;
                 }
 
                 // Validation: Warn if model provider doesn't match active provider (indicates state sync issue)
-                if (selectedModel.provider !== activeProvider) {
+                if (selectedModel && selectedModel.provider !== activeProvider) {
                     console.warn(`[AIPanel] Provider mismatch detected! selectedModel.provider=${selectedModel.provider}, activeProvider=${activeProvider}. Using activeProvider for endpoint resolution.`);
                 }
             }
 
-            const modelConfigWithEndpoint: ModelConfig = {
-                ...selectedModel,
-                ...(endpointToUse ? { endpoint: endpointToUse } : {}),
-                // Use custom model name if provided for OpenAI-compatible
-                ...(customModelName ? { modelId: customModelName } : {}),
-                // Ensure provider is set correctly to prevent routing to wrong backend
-                provider: activeProvider || selectedModel.provider
-            };
+            const modelConfigWithEndpoint: ModelConfig = selectedModel
+                ? {
+                    ...selectedModel,
+                    ...(endpointToUse ? { endpoint: endpointToUse } : {}),
+                    // Use custom model name for OpenAI-compatible, fall back to gpt-4o
+                    ...(activeProvider === ModelProvider.OpenAICompatible
+                        ? { modelId: customModelName || 'gpt-4o' }
+                        : {}),
+                    // Pass API key for providers that require it
+                    ...(apiKey ? { apiKey } : {}),
+                    // Ensure provider is set correctly to prevent routing to wrong backend
+                    provider: activeProvider || selectedModel.provider
+                }
+                : {
+                    id: selectedModelId || 'custom',
+                    name: selectedModelId || 'Custom Model',
+                    provider: activeProvider || ModelProvider.OpenAICompatible,
+                    modelId: customModelName || selectedModelId || 'gpt-4o',
+                    parameters: {
+                        temperature: 0.7,
+                        topP: 0.9,
+                        maxTokens: 4096,
+                        stream: true,
+                    },
+                    isAvailable: true,
+                    recommendedFor: [AIMode.QA, AIMode.Agent],
+                    ...(endpointToUse ? { endpoint: endpointToUse } : {}),
+                    ...(apiKey ? { apiKey } : {}),
+                };
 
-            console.log('[AIPanel] Selected model:', selectedModel.id);
-            console.log('[AIPanel] Selected model endpoint:', selectedModel.endpoint);
+            console.log('[AIPanel] Selected model:', selectedModel?.id);
+            console.log('[AIPanel] Selected model endpoint:', selectedModel?.endpoint);
             console.log('[AIPanel] endpointToUse:', endpointToUse);
             console.log('[AIPanel] customModelName:', customModelName);
             console.log('[AIPanel] Final modelConfigWithEndpoint.provider:', modelConfigWithEndpoint.provider);
