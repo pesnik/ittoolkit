@@ -4,6 +4,7 @@ import { runInference } from './ai-service';
 import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags } from './tool-calling';
 import { runtimeSettings } from '@/lib/runtimeSettings';
 import { classifyShellCommand } from './shell-classify';
+import { classifyComputerAction, describeComputerAction } from './computer-classify';
 
 export interface ToolExecutionEvent {
     /** Unique per call within a turn. The model can invoke the same tool
@@ -21,7 +22,16 @@ export interface ToolExecutionEvent {
     actions?: ToolResultAction[];
 }
 
-export type ConfirmKind = 'write' | 'read';
+export type ConfirmKind = 'write' | 'read' | 'destructive';
+
+/** Extra context shown to the user on the approval card. Shell commands
+ *  derive `intent` from cmd; computer-use populates `intent` + the latest
+ *  screenshot via the cache below. */
+export interface ConfirmMeta {
+    intent?: string;
+    screenshotBase64?: string;
+    surface?: 'shell' | 'computer';
+}
 
 export interface InferenceWithToolsOptions {
     onChunk?: (chunk: string) => void;
@@ -30,10 +40,16 @@ export interface InferenceWithToolsOptions {
     onConfirmExecution?: (
         toolName: string,
         args: Record<string, unknown>,
-        kind: ConfirmKind
+        kind: ConfirmKind,
+        meta?: ConfirmMeta,
     ) => Promise<boolean>;
     isCancelled?: () => boolean;
 }
+
+/** Cache of the most recent computer_screenshot result so write-action
+ *  approval cards can render the same screen the model saw. Cleared
+ *  when a new screenshot lands. */
+let LATEST_COMPUTER_SCREENSHOT: string | undefined;
 
 // Classification of which shell commands need a confirmation prompt is
 // delegated to ./shell-classify. That module tokenizes the command and
@@ -246,6 +262,8 @@ async function executeComputerTool(
                     },
                 }));
             }
+            // Cache for write-action approval cards.
+            LATEST_COMPUTER_SCREENSHOT = result.screenshot;
             const content = `Captured display ${result.displayIndex} (${result.width}×${result.height} at virtual (${result.x}, ${result.y})). Screenshot attached.`;
             return {
                 content,
@@ -282,8 +300,47 @@ async function executeComputerTool(
                 preview: { kind: 'computer_cursor_position', x: result.x, y: result.y },
             };
         }
+        // Write tools — invoke the matching Tauri command. Approval has
+        // already been granted by the time we reach here (the loop gates
+        // write actions via onConfirmExecution before calling executeTool).
+        const writeMap: Record<string, string> = {
+            computer_mouse_move: 'computer_mouse_move',
+            computer_left_click: 'computer_left_click',
+            computer_right_click: 'computer_right_click',
+            computer_middle_click: 'computer_middle_click',
+            computer_double_click: 'computer_double_click',
+            computer_left_click_drag: 'computer_left_click_drag',
+            computer_type: 'computer_type',
+            computer_key: 'computer_key',
+            computer_scroll: 'computer_scroll',
+        };
+        if (writeMap[toolName]) {
+            // Surface the floating kill-switch widget around the dispatch
+            // window so the user has a visible abort target during the
+            // 250 ms pre-action pause inside the Rust handler.
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('computer-action-pending'));
+            }
+            try {
+                await invoke(writeMap[toolName], args as Record<string, unknown>);
+            } finally {
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('computer-action-settled'));
+                }
+            }
+            const intent = describeComputerAction(toolName, args);
+            return {
+                content: `${intent} — dispatched.`,
+                isError: false,
+                preview: {
+                    kind: toolName,
+                    intent,
+                    ...args,
+                },
+            };
+        }
         return {
-            content: `Unknown computer tool "${toolName}". Available: computer_screenshot, computer_screen_size, computer_cursor_position.`,
+            content: `Unknown computer tool "${toolName}". Available: computer_screenshot, computer_screen_size, computer_cursor_position, computer_mouse_move, computer_left_click, computer_right_click, computer_middle_click, computer_double_click, computer_left_click_drag, computer_type, computer_key, computer_scroll.`,
             isError: true,
         };
     } catch (err) {
@@ -651,12 +708,32 @@ export async function runInferenceWithTools(
                     });
                 }
 
-                const cmd = (toolCall.arguments?.cmd as string) || '';
-                const confirmKind = toolCall.name === 'execute_command' ? classifyCommand(cmd) : null;
+                let confirmKind: ConfirmKind | null = null;
+                let confirmMeta: ConfirmMeta | undefined;
+                if (toolCall.name === 'execute_command') {
+                    const cmd = (toolCall.arguments?.cmd as string) || '';
+                    confirmKind = classifyCommand(cmd);
+                    confirmMeta = { surface: 'shell' };
+                } else if (toolCall.name.startsWith('computer_')) {
+                    const risk = classifyComputerAction(toolCall.name);
+                    if (risk === 'write') {
+                        confirmKind = 'write';
+                        confirmMeta = {
+                            surface: 'computer',
+                            intent: describeComputerAction(toolCall.name, toolCall.arguments),
+                            screenshotBase64: LATEST_COMPUTER_SCREENSHOT,
+                        };
+                    }
+                }
                 const needsConfirm = !!(onConfirmExecution && confirmKind);
 
                 if (needsConfirm && confirmKind) {
-                    const confirmed = await onConfirmExecution!(toolCall.name, toolCall.arguments, confirmKind);
+                    const confirmed = await onConfirmExecution!(
+                        toolCall.name,
+                        toolCall.arguments,
+                        confirmKind,
+                        confirmMeta,
+                    );
                     if (isCancelled?.()) {
                         throw new Error('Inference cancelled');
                     }

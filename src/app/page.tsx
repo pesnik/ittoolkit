@@ -5,6 +5,7 @@ import { FileSystemContext, FileMetadata } from '@/types/ai-types';
 import { FileExplorer } from '@/components/FileExplorer';
 import { AIPanel } from '@/components/AIPanel';
 import { ComputerView } from '@/components/ComputerView';
+import { ComputerKillSwitch } from '@/components/ComputerKillSwitch';
 import { featureFlags } from '@/lib/featureFlags';
 import { makeStyles, shorthands, tokens, Tab, TabList, type SelectTabEvent, type SelectTabData } from '@fluentui/react-components';
 
@@ -206,6 +207,7 @@ export default function Home() {
           prefillInput={aiPanelPrefill}
         />
       </div>
+      {showWorkspaceTabs && <ComputerKillSwitch />}
     </main>
   );
 }

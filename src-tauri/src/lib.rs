@@ -13,6 +13,7 @@ mod skills;
 mod user_info;
 mod user_profile;
 mod audit_log;
+mod computer_classify;
 mod computer_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +33,7 @@ pub fn run() {
       Ok(())
     })
     .manage(ai_commands::InferenceState::default())
+    .manage(computer_commands::ComputerState::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -107,7 +109,18 @@ pub fn run() {
         // Computer-use harness (CU-M2: read-only)
         computer_commands::computer_screenshot,
         computer_commands::computer_screen_size,
-        computer_commands::computer_cursor_position
+        computer_commands::computer_cursor_position,
+        // Computer-use harness (CU-M3: write tools + kill switch)
+        computer_commands::computer_mouse_move,
+        computer_commands::computer_left_click,
+        computer_commands::computer_right_click,
+        computer_commands::computer_middle_click,
+        computer_commands::computer_double_click,
+        computer_commands::computer_left_click_drag,
+        computer_commands::computer_type,
+        computer_commands::computer_key,
+        computer_commands::computer_scroll,
+        computer_commands::computer_kill
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

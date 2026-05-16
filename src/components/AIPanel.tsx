@@ -239,7 +239,10 @@ export const AIPanel = ({
     // Confirmation dialog (write = destructive mutation; read = privacy-sensitive content read)
     const [pendingConfirmation, setPendingConfirmation] = useState<{
         cmd: string;
-        kind: 'write' | 'read';
+        kind: 'write' | 'read' | 'destructive';
+        surface?: 'shell' | 'computer';
+        intent?: string;
+        screenshotBase64?: string;
         resolve: (value: boolean) => void;
     } | null>(null);
     const rejectConfirmRef = useRef<(() => void) | null>(null);
@@ -1008,7 +1011,7 @@ export const AIPanel = ({
                     ));
                 },
                 isCancelled: () => confirmCancelled,
-                onConfirmExecution: async (_toolName, args, kind) => {
+                onConfirmExecution: async (_toolName, args, kind, meta) => {
                     const cmd = (args?.cmd as string) || '';
                     return new Promise<boolean>((resolve) => {
                         rejectConfirmRef.current = () => {
@@ -1016,7 +1019,14 @@ export const AIPanel = ({
                             resolve(false);
                             setPendingConfirmation(null);
                         };
-                        setPendingConfirmation({ cmd, kind, resolve });
+                        setPendingConfirmation({
+                            cmd,
+                            kind,
+                            resolve,
+                            surface: meta?.surface,
+                            intent: meta?.intent,
+                            screenshotBase64: meta?.screenshotBase64,
+                        });
                     });
                 },
                 onProgress,
@@ -1358,21 +1368,49 @@ export const AIPanel = ({
                 />
             )}
 
-            {/* Confirmation dialog for write (destructive) or read (privacy-sensitive) commands */}
+            {/* Confirmation dialog. Shell variant shows the cmd; computer
+                variant shows intent + screenshot at action time. */}
             {pendingConfirmation && (
                 <div className={styles.confirmOverlay}>
                     <div className={styles.confirmDialog}>
                         <div className={styles.confirmTitle}>
-                            {pendingConfirmation.kind === 'read'
-                                ? 'Confirm file read'
-                                : 'Confirm destructive command'}
+                            {pendingConfirmation.surface === 'computer'
+                                ? 'Confirm computer action'
+                                : pendingConfirmation.kind === 'read'
+                                    ? 'Confirm file read'
+                                    : 'Confirm destructive command'}
                         </div>
                         <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
-                            {pendingConfirmation.kind === 'read'
-                                ? 'The agent wants to read file contents into its context. Approve only if this file is safe to share with the model:'
-                                : 'The agent wants to execute a potentially destructive command:'}
+                            {pendingConfirmation.surface === 'computer'
+                                ? 'The agent wants to control the mouse/keyboard. Review the screenshot below and the intent before approving — the action runs after a 250 ms pause; press Esc x3 or click the kill switch to abort during that window.'
+                                : pendingConfirmation.kind === 'read'
+                                    ? 'The agent wants to read file contents into its context. Approve only if this file is safe to share with the model:'
+                                    : 'The agent wants to execute a potentially destructive command:'}
                         </Text>
-                        <div className={styles.confirmCommand}>{pendingConfirmation.cmd}</div>
+                        {pendingConfirmation.surface === 'computer' ? (
+                            <>
+                                {pendingConfirmation.intent && (
+                                    <div className={styles.confirmCommand}>{pendingConfirmation.intent}</div>
+                                )}
+                                {pendingConfirmation.screenshotBase64 && (
+                                    <img
+                                        src={`data:image/jpeg;base64,${pendingConfirmation.screenshotBase64}`}
+                                        alt="latest screen capture"
+                                        style={{
+                                            display: 'block',
+                                            width: '100%',
+                                            maxHeight: 320,
+                                            objectFit: 'contain',
+                                            background: tokens.colorNeutralBackground1,
+                                            borderRadius: 6,
+                                            border: `1px solid ${tokens.colorNeutralStroke2}`,
+                                        }}
+                                    />
+                                )}
+                            </>
+                        ) : (
+                            <div className={styles.confirmCommand}>{pendingConfirmation.cmd}</div>
+                        )}
                         <div className={styles.confirmActions}>
                             <Button
                                 appearance="secondary"
@@ -1385,12 +1423,15 @@ export const AIPanel = ({
                             </Button>
                             <Button
                                 appearance="primary"
+                                style={pendingConfirmation.kind === 'destructive'
+                                    ? { backgroundColor: '#d13438', color: 'white' } as React.CSSProperties
+                                    : undefined}
                                 onClick={() => {
                                     pendingConfirmation.resolve(true);
                                     setPendingConfirmation(null);
                                 }}
                             >
-                                Confirm
+                                {pendingConfirmation.kind === 'destructive' ? 'Proceed Anyway' : 'Confirm'}
                             </Button>
                         </div>
                     </div>

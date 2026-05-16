@@ -182,10 +182,143 @@ const COMPUTER_CURSOR_POSITION_TOOL: Tool = {
     },
 };
 
+const COMPUTER_MOUSE_MOVE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_mouse_move',
+        description: `Move the mouse cursor to absolute virtual-desktop coordinates (no click). Classified as write — the app pauses 250 ms before dispatch so the user can hit the kill switch.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                x: { type: 'number' },
+                y: { type: 'number' },
+            },
+            required: ['x', 'y'],
+        },
+    },
+};
+
+const COMPUTER_LEFT_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_left_click',
+        description: `Left-click at (x, y) — or at the current cursor position when omitted. Always classified as write; surfaces a screenshot + intent confirmation card. After approval, the app dispatches the click.`,
+        parameters: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+        },
+    },
+};
+
+const COMPUTER_RIGHT_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_right_click',
+        description: `Right-click at (x, y) — or at the current cursor position when omitted. Write-classified.`,
+        parameters: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+        },
+    },
+};
+
+const COMPUTER_MIDDLE_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_middle_click',
+        description: `Middle-click at (x, y) — or at the current cursor position when omitted. Write-classified.`,
+        parameters: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+        },
+    },
+};
+
+const COMPUTER_DOUBLE_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_double_click',
+        description: `Double-click at (x, y) — or at the current cursor position when omitted. Write-classified.`,
+        parameters: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+        },
+    },
+};
+
+const COMPUTER_DRAG_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_left_click_drag',
+        description: `Press the left mouse button at (x1, y1), drag to (x2, y2), release. Write-classified.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                x1: { type: 'number' },
+                y1: { type: 'number' },
+                x2: { type: 'number' },
+                y2: { type: 'number' },
+            },
+            required: ['x1', 'y1', 'x2', 'y2'],
+        },
+    },
+};
+
+const COMPUTER_TYPE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_type',
+        description: `Type a string into the currently focused element. Use computer_left_click first to focus the right field. Write-classified. The typed value is NEVER written to the audit log — only the length plus a short prefix.`,
+        parameters: {
+            type: 'object',
+            properties: { text: { type: 'string' } },
+            required: ['text'],
+        },
+    },
+};
+
+const COMPUTER_KEY_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_key',
+        description: `Press a key or chord. Examples: "Enter", "Tab", "Escape", "cmd+space", "ctrl+shift+s". Modifiers recognized: ctrl/control, shift, alt/option, cmd/command/meta/super/win. Write-classified.`,
+        parameters: {
+            type: 'object',
+            properties: { key: { type: 'string' } },
+            required: ['key'],
+        },
+    },
+};
+
+const COMPUTER_SCROLL_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_scroll',
+        description: `Scroll the active window. direction: "up" | "down" | "left" | "right". clicks: number of scroll units (default 3). Write-classified — even read-looking scrolls can trigger inadvertent reveals (e.g. preview pane), so we ask.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+                clicks: { type: 'number' },
+            },
+            required: ['direction'],
+        },
+    },
+};
+
 const COMPUTER_TOOLS: Tool[] = [
     COMPUTER_SCREENSHOT_TOOL,
     COMPUTER_SCREEN_SIZE_TOOL,
     COMPUTER_CURSOR_POSITION_TOOL,
+    COMPUTER_MOUSE_MOVE_TOOL,
+    COMPUTER_LEFT_CLICK_TOOL,
+    COMPUTER_RIGHT_CLICK_TOOL,
+    COMPUTER_MIDDLE_CLICK_TOOL,
+    COMPUTER_DOUBLE_CLICK_TOOL,
+    COMPUTER_DRAG_TOOL,
+    COMPUTER_TYPE_TOOL,
+    COMPUTER_KEY_TOOL,
+    COMPUTER_SCROLL_TOOL,
 ];
 
 function activeModelSupportsVision(modelConfig: ModelConfig): boolean {

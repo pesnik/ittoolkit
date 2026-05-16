@@ -46,7 +46,8 @@ slug = "0.1"
 xcap = "0.8"           # cross-platform screen capture (macOS / Windows / Linux X11+Wayland)
 image = "0.25"         # JPEG encoding for screenshot output
 base64 = "0.22"        # base64 encode the JPEG bytes
-# enigo lands in CU-M3 (write tools); not needed for screenshot-only milestone
+enigo = "0.3"          # cross-platform mouse / keyboard simulation (CU-M3)
+tauri-plugin-global-shortcut = "2"  # Esc-Esc-Esc kill switch (CU-M3)
 
 # Partition Management
 gptman = "1.0"  # GPT partition table parsing
