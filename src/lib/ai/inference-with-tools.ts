@@ -15,6 +15,9 @@ export interface ToolExecutionEvent {
     error?: string;
     executionTimeMs?: number;
     cancelled?: boolean;
+    /** Structured actions emitted by the tool (e.g. confirm_action cards,
+     *  navigate chips). Carried through so the streaming UI can render them. */
+    actions?: ToolResultAction[];
 }
 
 export type ConfirmKind = 'write' | 'read';
@@ -492,6 +495,7 @@ export async function runInferenceWithTools(
                         result: result.content,
                         error: result.isError ? result.content : undefined,
                         executionTimeMs,
+                        actions: result.actions?.length ? result.actions : undefined,
                     });
                 }
 
