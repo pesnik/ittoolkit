@@ -78,8 +78,14 @@ Use this INSTEAD of writing file paths in plain text. The app shows chips, dialo
 
 Examples:
 • After du -sh, call agent_action with action="navigate" and paths=["/Users/name/Library/Caches"] to let the user click and browse
-• After listing files to delete, call agent_action with action="confirm_action", paths=[...], title="Delete 3 caches", description="These are safe to remove", totalSize=<bytes>, severity="low" to show a native confirmation dialog
-• For files the user should inspect, call agent_action with action="open_file" and paths=["..."]`,
+• Before any destructive command (rm/mv/dd/etc.), call agent_action with action="confirm_action", paths=[…], title="Delete 3 caches", description="These are safe to remove", totalSize=<bytes>, severity="medium", suggestedCommand="rm -rf '/path/a' '/path/b'", suggestedWorkingDir="/Users/name". The app will run suggestedCommand verbatim if the user clicks Execute — do NOT re-issue the command in a later turn.
+• For files the user should inspect, call agent_action with action="open_file" and paths=["..."]
+
+Constraints (enforced at dispatch):
+- Paths must be absolute (start with "/" or a Windows drive letter); no embedded newlines or NULs; ≤ 4096 chars each.
+- For confirm_action: title and description are required, plain text only, ≤ 500 chars each.
+- severity defaults to "medium" when omitted; the app may escalate to "high" for system paths or very large operations regardless of what you claim.
+- Max 5 actions per model response. Excess calls are rejected — batch into one confirm_action where possible.`,
         parameters: {
             type: 'object',
             properties: {
@@ -91,15 +97,15 @@ Examples:
                 paths: {
                     type: 'array',
                     items: { type: 'string' },
-                    description: 'One or more file/directory paths. For navigate/open_file, the app uses the first path.',
+                    description: 'One or more absolute file/directory paths. For navigate/open_file, the app uses the first path.',
                 },
                 title: {
                     type: 'string',
-                    description: 'Title for the confirmation dialog (required for confirm_action).',
+                    description: 'Title for the confirmation dialog (REQUIRED for confirm_action, max 500 chars, plain text).',
                 },
                 description: {
                     type: 'string',
-                    description: 'Explanation shown in the dialog body (required for confirm_action).',
+                    description: 'Explanation shown in the dialog body (REQUIRED for confirm_action, max 500 chars, plain text).',
                 },
                 totalSize: {
                     type: 'number',
@@ -108,7 +114,15 @@ Examples:
                 severity: {
                     type: 'string',
                     enum: ['low', 'medium', 'high'],
-                    description: 'Risk level shown as a colored badge (default: low).',
+                    description: 'Risk level shown as a colored badge. Defaults to "medium" if omitted; auto-escalated to "high" for system paths or very large operations.',
+                },
+                suggestedCommand: {
+                    type: 'string',
+                    description: 'REQUIRED for confirm_action. The exact shell command the app will run if the user clicks Execute. Use single-quoted paths to handle spaces.',
+                },
+                suggestedWorkingDir: {
+                    type: 'string',
+                    description: 'REQUIRED for confirm_action. Absolute working directory for suggestedCommand.',
                 },
             },
             required: ['action', 'paths'],

@@ -86,7 +86,77 @@ function unwrapNestedToolCall(toolCall: {
     return toolCall;
 }
 
-async function executeTool(toolCall: { name: string; arguments: Record<string, unknown> }): Promise<{
+/** Budget object threaded through one inference iteration (one model response,
+ *  potentially several tool calls). Rate-limits structured agent_action emits
+ *  so a misbehaving model can't flood the UI with chips/cards in a single turn. */
+interface TurnBudget {
+    /** Remaining agent_action emits permitted this iteration. */
+    actionsRemaining: number;
+}
+
+const MAX_ACTIONS_PER_TURN = 5;
+const MAX_PATH_CHARS = 4096;
+const MAX_PLAIN_TEXT_CHARS = 500;
+const MAX_PATHS_PER_ACTION = 100;
+
+/** Sensitive path prefixes that force severity to "high" regardless of what
+ *  the model claimed. Match either a leading "/Some/Thing" segment OR a
+ *  case-insensitive Windows-style "C:\\Windows" prefix. */
+const SENSITIVE_PREFIXES = [
+    /^\/(System|usr|bin|sbin|etc|Library|var|boot|opt|root)(\/|$)/,
+    /^[A-Z]:\\(Windows|Program Files|Program Files \(x86\)|ProgramData)(\\|$)/i,
+];
+
+const HIGH_RISK_TOTAL_SIZE = 10 * 1024 ** 3; // 10 GiB
+const HIGH_RISK_PATH_COUNT = 50;
+
+/** Strip control chars (except space) and clamp to maxLen. Used so any text
+ *  the model emits and the UI surfaces (title, description) cannot contain
+ *  hidden newlines, escape sequences, or grow unbounded. */
+function plainText(value: unknown, maxLen: number): string {
+    if (typeof value !== 'string') return '';
+    // eslint-disable-next-line no-control-regex
+    const cleaned = value.replace(/\p{Cc}+/gu, ' ').replace(/\s+/g, ' ').trim();
+    return cleaned.length > maxLen ? cleaned.slice(0, maxLen - 1) + '…' : cleaned;
+}
+
+/** Validate a single path string emitted by the model. We accept absolute
+ *  POSIX paths and Windows drive paths. Reject anything with embedded NULs,
+ *  newlines, or beyond MAX_PATH_CHARS. Returns the trimmed path on success
+ *  or null if invalid. */
+function validatePath(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const p = raw.trim();
+    if (!p) return null;
+    if (p.length > MAX_PATH_CHARS) return null;
+    if (/[\u0000\n\r]/.test(p)) return null;
+    const isPosixAbs = p.startsWith('/') || p.startsWith('~/');
+    const isWindowsAbs = /^[A-Za-z]:[\\/]/.test(p);
+    if (!isPosixAbs && !isWindowsAbs) return null;
+    return p;
+}
+
+/** Pick the higher of (claimed, derived) severity. The agent can over-claim
+ *  risk (which we honor) but never under-claim — sensitive prefixes, large
+ *  operations, and many-path batches force at least "high". */
+function escalateSeverity(
+    claimed: 'low' | 'medium' | 'high',
+    paths: string[],
+    totalSize: number,
+): 'low' | 'medium' | 'high' {
+    const isSensitive = paths.some((p) =>
+        SENSITIVE_PREFIXES.some((re) => re.test(p)),
+    );
+    if (isSensitive) return 'high';
+    if (totalSize >= HIGH_RISK_TOTAL_SIZE) return 'high';
+    if (paths.length >= HIGH_RISK_PATH_COUNT) return 'high';
+    return claimed;
+}
+
+async function executeTool(
+    toolCall: { name: string; arguments: Record<string, unknown> },
+    turnBudget: TurnBudget,
+): Promise<{
     content: string;
     isError: boolean;
     actions?: ToolResultAction[];
@@ -100,7 +170,7 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
     });
 
     if (normalized.name === 'agent_action') {
-        return executeAgentAction(normalized.arguments);
+        return executeAgentAction(normalized.arguments, turnBudget);
     }
     if (normalized.name === 'search_conversations') {
         return executeSearchConversations(normalized.arguments);
@@ -115,25 +185,55 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
     return executeShellCommand(normalized.arguments);
 }
 
-/** Handle agent_action tool call: parse the action from arguments and return
- *  it as a structured action so the UI renders it natively. */
-function executeAgentAction(args: Record<string, unknown>): {
+/** Handle agent_action tool call: validate arguments at the LLM/UI boundary,
+ *  then return a structured action the UI renders natively. The validator
+ *  is the only thing standing between model output and the user's file
+ *  explorer / shell — keep it strict. */
+function executeAgentAction(
+    args: Record<string, unknown>,
+    turnBudget: TurnBudget,
+): {
     content: string;
     isError: boolean;
     actions: ToolResultAction[];
 } {
-    const action = (args.action as string) || 'navigate';
-    const paths = (args.paths as string[]) || [];
+    if (turnBudget.actionsRemaining <= 0) {
+        return {
+            content: `agent_action: per-turn action limit (${MAX_ACTIONS_PER_TURN}) exceeded. Batch related paths into one confirm_action, or split the work into a follow-up turn.`,
+            isError: true,
+            actions: [],
+        };
+    }
+
+    const rawAction = typeof args.action === 'string' ? args.action.trim() : '';
+    const ALLOWED_ACTIONS = new Set(['navigate', 'open_file', 'highlight', 'confirm_action']);
+    if (!ALLOWED_ACTIONS.has(rawAction)) {
+        return {
+            content: `agent_action: invalid "action" value ${JSON.stringify(args.action)}. Must be one of: navigate, open_file, highlight, confirm_action.`,
+            isError: true,
+            actions: [],
+        };
+    }
+    const action = rawAction as 'navigate' | 'open_file' | 'highlight' | 'confirm_action';
+
+    const rawPaths = Array.isArray(args.paths) ? args.paths : [];
+    const validPaths: string[] = [];
+    for (const candidate of rawPaths.slice(0, MAX_PATHS_PER_ACTION)) {
+        const p = validatePath(candidate);
+        if (p) validPaths.push(p);
+    }
+    if (validPaths.length === 0) {
+        return {
+            content: `agent_action: "paths" must contain at least one absolute path (POSIX "/…" or Windows "C:\\…"), no newlines or NUL bytes, ≤ ${MAX_PATH_CHARS} chars each. Got: ${JSON.stringify(args.paths)?.slice(0, 200)}.`,
+            isError: true,
+            actions: [],
+        };
+    }
+
+    turnBudget.actionsRemaining -= 1;
 
     if (action === 'navigate' || action === 'open_file') {
-        const path = paths[0];
-        if (!path) {
-            return {
-                content: 'agent_action: no path provided for navigate/open_file.',
-                isError: true,
-                actions: [],
-            };
-        }
+        const path = validPaths[0];
         return {
             content: `Action emitted: ${action} to ${path}`,
             isError: false,
@@ -143,34 +243,67 @@ function executeAgentAction(args: Record<string, unknown>): {
 
     if (action === 'highlight') {
         return {
-            content: `Action emitted: highlight ${paths.length} path(s).`,
+            content: `Action emitted: highlight ${validPaths.length} path(s).`,
             isError: false,
-            actions: [{ type: 'highlight', payload: { paths } }],
+            actions: [{ type: 'highlight', payload: { paths: validPaths } }],
         };
     }
 
-    if (action === 'confirm_action') {
+    // confirm_action — strictest validation. The suggestedCommand here is the
+    // exact string the UI will hand to execute_command on user approval, so
+    // do NOT relax requirements; missing fields mean we cannot safely run.
+    const title = plainText(args.title, MAX_PLAIN_TEXT_CHARS);
+    const description = plainText(args.description, MAX_PLAIN_TEXT_CHARS);
+    if (!title || !description) {
         return {
-            content: `Action emitted: confirm_action — ${args.title || 'untitled'}`,
-            isError: false,
-            actions: [{
-                type: 'confirm_action',
-                payload: {
-                    title: (args.title as string) || 'Confirm action',
-                    description: (args.description as string) || '',
-                    items: paths,
-                    totalSize: (args.totalSize as number) || 0,
-                    severity: (args.severity as 'low' | 'medium' | 'high') || 'low',
-                    actionId: `agent-${Date.now()}`,
-                },
-            }],
+            content: 'agent_action(confirm_action): both "title" and "description" are required, plain text, ≤ 500 chars.',
+            isError: true,
+            actions: [],
         };
     }
+    const suggestedCommand = typeof args.suggestedCommand === 'string' ? args.suggestedCommand.trim() : '';
+    const suggestedWorkingDir = typeof args.suggestedWorkingDir === 'string'
+        ? validatePath(args.suggestedWorkingDir)
+        : null;
+    if (!suggestedCommand || !suggestedWorkingDir) {
+        return {
+            content: 'agent_action(confirm_action): "suggestedCommand" and "suggestedWorkingDir" (absolute path) are required so the app can run the action verbatim on user approval.',
+            isError: true,
+            actions: [],
+        };
+    }
+    if (/[\u0000\n\r]/.test(suggestedCommand)) {
+        return {
+            content: 'agent_action(confirm_action): "suggestedCommand" must not contain embedded newlines or NUL bytes.',
+            isError: true,
+            actions: [],
+        };
+    }
+    const totalSize = typeof args.totalSize === 'number' && args.totalSize >= 0 ? args.totalSize : 0;
+    const claimedSeverity: 'low' | 'medium' | 'high' =
+        args.severity === 'low' || args.severity === 'medium' || args.severity === 'high'
+            ? args.severity
+            : 'medium'; // safer default than 'low' when the model omits it
+    const severity = escalateSeverity(claimedSeverity, validPaths, totalSize);
+
+    const actionId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     return {
-        content: `Unknown agent_action type: "${action}". Valid types: navigate, open_file, highlight, confirm_action.`,
-        isError: true,
-        actions: [],
+        content: `Action emitted: confirm_action — ${title}${severity !== claimedSeverity ? ` (severity escalated ${claimedSeverity} → ${severity})` : ''}`,
+        isError: false,
+        actions: [{
+            type: 'confirm_action',
+            payload: {
+                title,
+                description,
+                items: validPaths,
+                totalSize,
+                severity,
+                actionId,
+                suggestedCommand,
+                suggestedWorkingDir,
+            },
+        }],
     };
 }
 
@@ -391,6 +524,11 @@ export async function runInferenceWithTools(
         }
 
         const toolResults: ChatMessage[] = [];
+        // One TurnBudget per inference iteration. Rate-limits structured
+        // agent_action emits so the model can't flood the UI with chips/
+        // cards in a single response. Re-allotted each iteration since
+        // the user is meant to confirm/dismiss between iterations.
+        const turnBudget: TurnBudget = { actionsRemaining: MAX_ACTIONS_PER_TURN };
 
         for (const toolCall of toolCalls) {
             try {
@@ -448,7 +586,7 @@ export async function runInferenceWithTools(
                     status: 'executing',
                 };
 
-                const result = await executeTool(toolCall);
+                const result = await executeTool(toolCall, turnBudget);
                 const executionTimeMs = Date.now() - startTime;
 
                 toolExecution.status = result.isError ? 'error' : 'success';

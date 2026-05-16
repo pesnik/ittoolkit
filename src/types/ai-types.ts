@@ -88,7 +88,20 @@ export type ToolResultAction =
   | { type: 'render_tree'; payload: { root: string; totalSize: number; entries: Array<{ path: string; size: number; isDir: boolean }> } }
   | { type: 'open_file'; payload: { path: string } }
   | { type: 'highlight'; payload: { paths: string[]; reason?: string } }
-  | { type: 'confirm_action'; payload: { title: string; description: string; items: string[]; totalSize: number; severity: 'low' | 'medium' | 'high'; actionId: string } };
+  | { type: 'confirm_action'; payload: {
+        title: string;
+        description: string;
+        items: string[];
+        totalSize: number;
+        severity: 'low' | 'medium' | 'high';
+        actionId: string;
+        /** The exact shell command the app will run if the user clicks
+         *  Execute. Captured at emit time so we don't depend on the model
+         *  re-issuing the same command after confirmation. */
+        suggestedCommand: string;
+        /** Absolute working directory for the suggested command. */
+        suggestedWorkingDir: string;
+    } };
 
 /**
  * Tool execution data for display
