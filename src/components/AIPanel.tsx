@@ -684,26 +684,29 @@ export const AIPanel = ({
     };
 
     const handleSendMessage = async (content: string) => {
-        // Clean up any incomplete messages and ensure proper alternation
-        // IMPORTANT: We need to capture the cleaned messages to use for the API call
+        // Decouple the visible transcript from the API-context view. The user
+        // keeps seeing prior failed turns (user query + error bubble); we only
+        // drop them when composing the prompt for the next inference call.
         let cleanedMessages: ChatMessage[] = [];
 
         setMessages((prev) => {
-            // Remove streaming/thinking messages AND error messages from failed requests
-            let cleaned = prev.filter(msg =>
-                !(msg.content === '💭 Thinking...' ||
-                    msg.isStreaming ||
-                    msg.content.startsWith('Sorry, I encountered an error:') ||
-                    msg.error)
+            // Drop only in-flight artifacts from the visible transcript — these
+            // can linger if a previous send was cancelled mid-stream.
+            const visible = prev.filter(msg =>
+                !(msg.content === '💭 Thinking...' || msg.isStreaming)
             );
 
-            // If last message is a user message, remove it (it was from a cancelled request)
-            if (cleaned.length > 0 && cleaned[cleaned.length - 1].role === MessageRole.User) {
-                cleaned = cleaned.slice(0, -1);
+            // For the API call, also drop error bubbles and any trailing orphan
+            // user message (a failed turn with no assistant response).
+            let forApi = visible.filter(msg =>
+                !(msg.content.startsWith('Sorry, I encountered an error:') || msg.error)
+            );
+            if (forApi.length > 0 && forApi[forApi.length - 1].role === MessageRole.User) {
+                forApi = forApi.slice(0, -1);
             }
+            cleanedMessages = forApi;
 
-            cleanedMessages = cleaned; // Capture for API call
-            return cleaned;
+            return visible;
         });
 
         // Parse "/skill-name [args...]" — if it matches, we'll load the skill
@@ -1117,6 +1120,13 @@ export const AIPanel = ({
                 );
                 errorMessage.error = error.message;
                 setMessages((prev) => [...prev, errorMessage]);
+
+                void persistMessage(
+                    errorMessage,
+                    selectedModelForPersist?.modelId,
+                    selectedModelForPersist?.provider,
+                    mode
+                );
             }
         } finally {
             setIsLoading(false);
