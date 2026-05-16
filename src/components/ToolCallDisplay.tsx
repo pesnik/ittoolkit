@@ -146,9 +146,18 @@ export function ToolCallDisplay({ execution }: ToolCallDisplayProps) {
         const trimmed = cmd.trim();
         const firstWord = trimmed.split(/\s+/)[0] || '';
 
+        const firstNonFlagArg = (args: string): string | null => {
+            for (const part of args.split(/\s+/)) {
+                if (part && !part.startsWith('-')) return part;
+            }
+            return null;
+        };
         const patterns: [RegExp, (m: RegExpMatchArray) => string][] = [
-            [/^cat\s+(.+)/, (m) => `Read file: ${m[1].split(/\s+/)[0]}`],
-            [/^ls\s+(.+)/, (m) => `List directory: ${m[1].split(/\s+/)[0]}`],
+            [/^cat\s+(.+)/, (m) => `Read file: ${firstNonFlagArg(m[1]) ?? m[1].split(/\s+/)[0]}`],
+            [/^ls\s+(.+)/, (m) => {
+                const path = firstNonFlagArg(m[1]);
+                return path ? `List directory: ${path}` : 'List directory contents';
+            }],
             [/^ls\b/, () => 'List directory contents'],
             [/^find\s/, () => 'Search for files'],
             [/^grep\s/, () => 'Search file contents'],

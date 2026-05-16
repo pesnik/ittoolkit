@@ -81,6 +81,10 @@ export interface ModelParameters {
  * Tool execution data for display
  */
 export interface ToolExecutionData {
+    /** Per-call id from the model. Used to match status updates back to the
+     *  right row when the same tool runs multiple times in one turn. Optional
+     *  because messages loaded from disk don't carry the original call id. */
+    id?: string;
     toolName: string;
     arguments: Record<string, unknown>;
     result?: string;

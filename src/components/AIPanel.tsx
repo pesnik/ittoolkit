@@ -68,7 +68,7 @@ import {
 } from '@/lib/ai/memory/summary';
 import { extractFactsFromConversation, mergeUserProfileFacts } from '@/lib/ai/memory/profile';
 import { refreshUserProfileCache } from '@/lib/ai/memory/profile-cache';
-import { computeMemoryBudget } from '@/lib/ai/memory/budget';
+import { computeMemoryBudget, suggestContextWindow } from '@/lib/ai/memory/budget';
 import {
     listSkills,
     loadSkillBody,
@@ -772,13 +772,17 @@ export const AIPanel = ({
                 }
             }
 
-            // Resolve effective contextWindow: saved preset (for OpenAI-compatible)
-            // beats the model's hardcoded value; either beats the default fallback
-            // applied inside computeMemoryBudget.
+            // Resolve effective contextWindow for OpenAI-compatible:
+            //   1. explicit value on the saved preset (user typed it)
+            //   2. auto-suggestion based on the model name (gpt-4o → 128K, etc.)
+            //   3. fall through to the 8K default in computeMemoryBudget
+            // For other providers, the value already lives on the ModelConfig.
             let presetContextWindow: number | undefined;
             if (activeProvider === ModelProvider.OpenAICompatible) {
                 const preset = getActiveProvider();
-                presetContextWindow = preset?.contextWindow;
+                presetContextWindow =
+                    preset?.contextWindow
+                    ?? suggestContextWindow(customModelName || preset?.modelName)?.tokens;
             }
 
             const modelConfigWithEndpoint: ModelConfig = selectedModel
@@ -898,22 +902,43 @@ export const AIPanel = ({
                     ));
                 } : undefined,
                 onToolExecution: (event) => {
+                    // Primary match: per-call id (model can invoke the same
+                    // tool multiple times in a single turn).
+                    // Fallback: oldest 'executing' row for the same toolName.
+                    // Some models / fallback paths produce undefined ids; the
+                    // fallback prevents the "stuck on Executing forever" bug
+                    // even when id matching fails.
+                    const findExisting = () => {
+                        if (event.id) {
+                            const byId = toolExecutions.find(e => e.id === event.id);
+                            if (byId) return byId;
+                        }
+                        return toolExecutions.find(
+                            e => e.toolName === event.toolName && e.status === 'executing',
+                        );
+                    };
                     if (event.cancelled) {
-                        const existing = toolExecutions.find(e => e.toolName === event.toolName && e.status === 'executing');
+                        const existing = findExisting();
                         if (existing) {
                             existing.status = 'cancelled';
                             existing.result = event.result;
                         }
                     } else if (event.result || event.error) {
-                        const existing = toolExecutions.find(e => e.toolName === event.toolName);
+                        const existing = findExisting();
                         if (existing) {
                             existing.status = event.error ? 'error' as const : 'success' as const;
                             existing.result = event.result;
                             existing.error = event.error;
                             existing.executionTimeMs = event.executionTimeMs;
+                        } else {
+                            console.warn(
+                                '[AIPanel] tool completion event had no matching executing row',
+                                { id: event.id, toolName: event.toolName },
+                            );
                         }
                     } else {
                         toolExecutions.push({
+                            id: event.id,
                             toolName: event.toolName,
                             arguments: event.arguments as Record<string, unknown>,
                             status: 'executing',

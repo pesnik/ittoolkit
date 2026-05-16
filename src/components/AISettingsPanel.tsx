@@ -51,7 +51,7 @@ import {
     featureFlags,
     isFeatureFlagOverridden,
 } from '@/lib/featureFlags';
-import { computeMemoryBudget, formatTokens } from '@/lib/ai/memory/budget';
+import { computeMemoryBudget, formatTokens, suggestContextWindow } from '@/lib/ai/memory/budget';
 import {
     listSavedProviders,
     getActiveProvider,
@@ -1063,21 +1063,28 @@ export function AISettingsPanel({
                                     </>
                                 )}
 
-                                {selectedTab === 'advanced' && (
-                                    <AdvancedPreviewPane
-                                        activeContextWindow={
-                                            (activeProvider === ModelProvider.OpenAICompatible
-                                                ? getActiveProvider()?.contextWindow
-                                                : undefined) ?? modelConfig?.parameters?.contextWindow
-                                        }
-                                        activeMaxTokens={modelConfig?.parameters?.maxTokens}
-                                        activeModelLabel={
-                                            activeProvider === ModelProvider.OpenAICompatible
-                                                ? (customModelName || modelConfig?.name)
-                                                : modelConfig?.name
-                                        }
-                                    />
-                                )}
+                                {selectedTab === 'advanced' && (() => {
+                                    const preset = activeProvider === ModelProvider.OpenAICompatible
+                                        ? getActiveProvider()
+                                        : undefined;
+                                    const effectiveContextWindow =
+                                        preset?.contextWindow
+                                        ?? (activeProvider === ModelProvider.OpenAICompatible
+                                            ? suggestContextWindow(customModelName || preset?.modelName)?.tokens
+                                            : undefined)
+                                        ?? modelConfig?.parameters?.contextWindow;
+                                    return (
+                                        <AdvancedPreviewPane
+                                            activeContextWindow={effectiveContextWindow}
+                                            activeMaxTokens={modelConfig?.parameters?.maxTokens}
+                                            activeModelLabel={
+                                                activeProvider === ModelProvider.OpenAICompatible
+                                                    ? (customModelName || modelConfig?.name)
+                                                    : modelConfig?.name
+                                            }
+                                        />
+                                    );
+                                })()}
                             </div>
                         </div>
                     </DialogContent>

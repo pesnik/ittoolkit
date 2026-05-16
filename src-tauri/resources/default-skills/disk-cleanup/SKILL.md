@@ -16,37 +16,68 @@ You are helping the user reclaim disk space. Be cautious — never delete anythi
 df -h 2>/dev/null | head -10 || echo "df not available"
 ```
 
-## Common safe-to-clean locations
+## How to find what's using space — DO IT IN THIS ORDER
 
-These are the categories worth inspecting first. Use `execute_command` (with `du -sh`) to size them before suggesting cleanup.
+**Never run `du -sh /*` from the root of the disk.** On macOS that traverses `/System` (huge, protected) and on Linux it walks `/proc` and `/sys`. Either takes longer than the tool timeout and tells the user nothing actionable.
 
-### macOS
-- `~/Library/Caches/` — app caches, regenerated on demand. Safe to clear when an app is closed.
+Instead, drill into bounded, user-owned paths *one at a time*. Each path can be sized in seconds; the whole disk takes minutes.
+
+### Step 1 — measure the home directory's top level
+
+```
+du -sh ~/Library ~/Documents ~/Downloads ~/Desktop ~/Movies ~/Music ~/Pictures 2>/dev/null
+```
+
+This usually finishes in under 10 seconds and identifies the biggest user-owned bucket.
+
+### Step 2 — drill into the biggest bucket from Step 1
+
+If `~/Library` was largest (common on macOS), measure its children:
+
+```
+du -sh ~/Library/Caches ~/Library/Logs ~/Library/Application\ Support ~/Library/Developer 2>/dev/null
+```
+
+If `~/Downloads` was largest, list it sorted by size:
+
+```
+ls -laS ~/Downloads | head -20
+```
+
+### Step 3 — categorize cleanup candidates
+
+The locations below are safe-to-clean (caches/logs regenerated on demand). Measure first, never delete blindly.
+
+#### macOS
+- `~/Library/Caches/` — app caches.
 - `~/Library/Logs/` — old log files.
 - `~/.Trash/` — emptied trash.
-- `/Library/Caches/` — system caches (requires admin; mention but don't auto-run).
-- `~/Library/Developer/Xcode/DerivedData` — large for developers.
+- `~/Library/Developer/Xcode/DerivedData` — large for developers, fully regenerable.
+- `~/Library/Caches/com.apple.dt.Xcode` — Xcode cache.
 
-### Linux
+#### Linux
 - `~/.cache/` — XDG cache directory.
-- `/var/log/` — system logs (root only; mention).
 - `~/.local/share/Trash/` — trash.
 
-### Windows (cross-platform pointers)
-- `%LOCALAPPDATA%\Temp` — temp files.
-- `%LOCALAPPDATA%\Microsoft\Windows\INetCache` — IE/Edge cache.
+## Slow-command discipline
+
+- `du -sh` on a single small directory: usually < 5s. No timeout override needed.
+- `du -sh` on `~/Library` or other deep trees: can take 20-60s. Pass `timeout_secs: 120` explicitly.
+- `du -sh /` or `du -sh /*`: do not run. Always pin to a specific user-owned subdirectory.
+- If a command times out, your next call should narrow the path, not retry the same broad scan with a longer timeout.
 
 ## Workflow
 
-1. Run `du -sh` on each candidate path that exists on this OS to measure it.
-2. Report sizes back to the user with a brief explanation of what each location holds.
-3. Ask which ones they want to clear.
-4. For each confirmed target, run the appropriate clear command (`rm -rf <path>/*` for caches, never the path itself).
-5. After cleanup, re-run `df -h` and show the delta.
+1. **Measure first.** Use `du -sh <path>` on each candidate. Report sizes back to the user.
+2. **Ask.** Don't propose to delete until the user has seen sizes and picked targets.
+3. **Confirm per-target.** For each chosen path, state exactly what you'll run before running it.
+4. **Clear with `rm -rf <path>/*`** — *contents* of the directory, never the directory itself.
+5. **Verify.** Re-run `df -h` and show the delta.
 
 ## What NOT to do
 
-- Never touch `~/Documents`, `~/Desktop`, `~/Downloads` without the user reviewing each file.
-- Never run cleanup on system paths (`/System`, `/usr`, `C:\Windows`) — those are managed by the OS.
+- Never `du -sh /*` or `du -sh /` — explained above.
+- Never touch `~/Documents`, `~/Desktop`, `~/Downloads` contents without the user reviewing each file. List, don't auto-clean.
+- Never run cleanup on system paths (`/System`, `/usr`, `C:\Windows`) — managed by the OS.
 - Never delete files in active app data dirs (`~/Library/Application Support/`) without naming the specific app and getting confirmation.
 - Do not use `sudo` — if a path needs elevation, tell the user and stop.

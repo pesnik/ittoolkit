@@ -3,7 +3,13 @@
  *
  * Trims a ChatMessage[] so it fits within `budgetTokens`, while:
  *   - keeping ALL system messages (system prompt, summary, profile, skill body)
- *   - keeping the most recent non-system messages
+ *     unchanged — they're accounted for separately in `computeMemoryBudget`,
+ *     so this function does NOT subtract them again (that double-count caused
+ *     small-budget cases to drop every user message)
+ *   - keeping the most recent non-system messages within `budgetTokens`
+ *   - ALWAYS keeping the most recent non-system message, even if it busts the
+ *     budget — better to let the API reject an oversized prompt with a clear
+ *     error than silently swallow the user's question
  *   - never leaving an orphan tool-result message at the head of the trimmed
  *     non-system tail (it would confuse the model — a tool result with no
  *     preceding tool call)
@@ -27,31 +33,45 @@ function looksLikeOrphanToolResult(m: ChatMessage): boolean {
     return TOOL_RESULT_PREFIXES.some((p) => c.startsWith(p));
 }
 
+/**
+ * @param budgetTokens budget for the *conversational* (non-system) portion of
+ *   the prompt. The system reserve is already baked into this number upstream
+ *   in `computeMemoryBudget` — do not subtract it again.
+ */
 export function trimToTokenBudget(
     messages: ChatMessage[],
     budgetTokens: number,
 ): WindowResult {
     const tokensBefore = estimateMessagesTokens(messages);
-    if (tokensBefore <= budgetTokens) {
-        return { messages, droppedCount: 0, tokensBefore, tokensAfter: tokensBefore };
-    }
-
     const systemMessages = messages.filter(isSystemMessage);
     const conversational = messages.filter((m) => !isSystemMessage(m));
 
-    const systemTokens = estimateMessagesTokens(systemMessages);
-    const conversationalBudget = Math.max(0, budgetTokens - systemTokens);
+    if (estimateMessagesTokens(conversational) <= budgetTokens) {
+        return { messages, droppedCount: 0, tokensBefore, tokensAfter: tokensBefore };
+    }
 
     const kept: ChatMessage[] = [];
     let runningTokens = 0;
     for (let i = conversational.length - 1; i >= 0; i--) {
-        const cost = estimateMessageTokens(conversational[i]);
-        if (runningTokens + cost > conversationalBudget) break;
-        kept.unshift(conversational[i]);
+        const msg = conversational[i];
+        const cost = estimateMessageTokens(msg);
+        const isLast = i === conversational.length - 1;
+
+        if (isLast) {
+            // Always include the most recent non-system message, even if it
+            // alone exceeds the budget. Stripping it would send a payload with
+            // no user turn and the API would reject with a confusing error.
+            kept.unshift(msg);
+            runningTokens += cost;
+            continue;
+        }
+
+        if (runningTokens + cost > budgetTokens) break;
+        kept.unshift(msg);
         runningTokens += cost;
     }
 
-    while (kept.length > 0 && looksLikeOrphanToolResult(kept[0])) {
+    while (kept.length > 1 && looksLikeOrphanToolResult(kept[0])) {
         kept.shift();
     }
 

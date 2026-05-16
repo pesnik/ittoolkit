@@ -125,11 +125,20 @@ pub async fn run_openai_compatible_inference(
 
     println!("[OpenAI-Compatible] Request URL: {}", url);
     println!("[OpenAI-Compatible] Model: {}", request.model_config.model_id);
+    println!(
+        "[OpenAI-Compatible] Messages to send: {} (roles: {})",
+        openai_request.messages.len(),
+        openai_request.messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>().join(", "),
+    );
+    let total_content_chars: usize = openai_request.messages.iter()
+        .map(|m| m.content.as_deref().map(|c| c.len()).unwrap_or(0))
+        .sum();
+    println!("[OpenAI-Compatible] Total content chars: {}", total_content_chars);
     println!("[OpenAI-Compatible] Tools included: {}", request.tools.is_some());
     if let Some(tools) = &request.tools {
         println!("[OpenAI-Compatible] Number of tools: {}", tools.len());
         for tool in tools {
-            println!("[OpenAI-Compatible]   - {}: {}", tool.function.name, tool.function.description);
+            println!("[OpenAI-Compatible]   - {}", tool.function.name);
         }
     }
 

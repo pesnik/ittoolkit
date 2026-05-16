@@ -11,7 +11,11 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 const MAX_OUTPUT_CHARS: usize = 10_000;
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
+// Default chosen empirically: `du -sh /*` from root on macOS routinely exceeds
+// 30s once /System and /Users are traversed, and the model has no good way to
+// know the operation is slow up front. 120s covers most disk-scan cases while
+// keeping a hard 300s ceiling on truly runaway commands.
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS: u64 = 300;
 
 static BLOCKED_PATTERNS: &[&str] = &[

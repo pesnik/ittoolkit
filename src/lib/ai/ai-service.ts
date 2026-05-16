@@ -486,24 +486,27 @@ Do NOT call this for things you can answer from the current conversation or curr
     console.log('[ai-service]   System prompt preview (first 500 chars):', systemPrompt.substring(0, 500));
     console.log('[ai-service]   Execute command tool description length:', executeCommandDesc.length);
 
-    // Check if system message already exists
-    const systemMessageIndex = request.messages.findIndex(
-        (m) => m.role === MessageRole.System
+    // Find an existing AGENT system message (id starts with "system-agent-")
+    // and refresh it in place. We intentionally do NOT touch other system
+    // messages in the array — those carry conversation-summary text (id
+    // "summary-…") or invoked-skill bodies (id "skill-…") that must survive
+    // the round-trip to the model. The previous unconditional replace was
+    // silently overwriting summaries.
+    const agentSystemIndex = request.messages.findIndex(
+        (m) => m.role === MessageRole.System && m.id.startsWith('system-agent-'),
     );
 
     const systemMessage: ChatMessage = {
-        id: `system-${Date.now()}`,
+        id: `system-agent-${Date.now()}`,
         role: MessageRole.System,
         content: systemPrompt,
         timestamp: Date.now(),
     };
 
-        // If system message exists, replace it with the new one
-        // CAUSE: Previous logic returned early if system message existed, preserving old context
         let withSystem: ChatMessage[];
-        if (systemMessageIndex !== -1) {
+        if (agentSystemIndex !== -1) {
             withSystem = [...request.messages];
-            withSystem[systemMessageIndex] = systemMessage;
+            withSystem[agentSystemIndex] = systemMessage;
         } else {
             withSystem = [systemMessage, ...request.messages];
         }

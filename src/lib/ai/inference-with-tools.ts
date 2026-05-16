@@ -2,10 +2,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { InferenceRequest, InferenceResponse, ChatMessage, MessageRole, ToolExecutionData } from '@/types/ai-types';
 import { runInference } from './ai-service';
 import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags } from './tool-calling';
-
-const MAX_TOOL_ITERATIONS = 5;
+import { runtimeSettings } from '@/lib/runtimeSettings';
 
 export interface ToolExecutionEvent {
+    /** Unique per call within a turn. The model can invoke the same tool
+     *  multiple times in one turn (e.g. several `execute_command` calls);
+     *  consumers must track state by this id rather than by toolName. */
+    id: string;
     toolName: string;
     arguments: Record<string, unknown>;
     result?: string;
@@ -67,29 +70,109 @@ interface ExecuteCommandResponse {
     timed_out: boolean;
 }
 
+/**
+ * Some providers (and some models when given multiple tools) emit a malformed
+ * tool call where the entire JSON tool-call object ends up in the `name`
+ * field instead of being unwrapped. e.g.
+ *   { name: '{"id":"call_1","name":"execute_command","arguments":{...}}', arguments: {} }
+ * Unwrap that in-place before dispatching so we don't bail with "unknown tool".
+ */
+function unwrapNestedToolCall(toolCall: {
+    name: string;
+    arguments: Record<string, unknown>;
+}): { name: string; arguments: Record<string, unknown> } {
+    const trimmed = toolCall.name?.trim?.() ?? '';
+    if (!trimmed.startsWith('{')) return toolCall;
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (
+            parsed &&
+            typeof parsed === 'object' &&
+            typeof parsed.name === 'string' &&
+            parsed.arguments &&
+            typeof parsed.arguments === 'object'
+        ) {
+            console.warn(
+                '[inference-with-tools] Recovered tool call wrapped in name field. Original name:',
+                trimmed.slice(0, 120) + (trimmed.length > 120 ? '…' : ''),
+            );
+            return {
+                name: parsed.name,
+                arguments: parsed.arguments as Record<string, unknown>,
+            };
+        }
+    } catch {
+        // not parseable — fall through and let dispatch report unknown tool
+    }
+    return toolCall;
+}
+
 async function executeTool(toolCall: { name: string; arguments: Record<string, unknown> }): Promise<{
     content: string;
     isError: boolean;
 }> {
-    if (toolCall.name === 'search_conversations') {
-        return executeSearchConversations(toolCall.arguments);
+    const normalized = unwrapNestedToolCall(toolCall);
+    console.log('[inference-with-tools] dispatch:', {
+        id: (toolCall as { id?: string }).id,
+        name: normalized.name,
+        argKeys: Object.keys(normalized.arguments ?? {}),
+        argsPreview: JSON.stringify(normalized.arguments).slice(0, 200),
+    });
+
+    if (normalized.name === 'search_conversations') {
+        return executeSearchConversations(normalized.arguments);
     }
-    return executeShellCommand(toolCall.arguments);
+    if (normalized.name !== 'execute_command') {
+        console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
+        return {
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit). Use one of these exact names.`,
+            isError: true,
+        };
+    }
+    return executeShellCommand(normalized.arguments);
 }
 
 async function executeShellCommand(args: Record<string, unknown>): Promise<{
     content: string;
     isError: boolean;
 }> {
-    const { cmd, working_dir, timeout_secs } = args as {
-        cmd?: string;
-        working_dir?: string;
-        timeout_secs?: number;
-    };
+    // Accept a few common aliases the model sometimes emits in place of the
+    // documented keys. Underscores in JSON keys occasionally get rendered as
+    // spaces or stripped by markdown in the UI, so it's easy to think the
+    // model is misbehaving when it actually isn't. Either way, normalizing
+    // here gives us a clear error if the actual problem is missing data.
+    const cmd =
+        (args.cmd as string | undefined)
+        ?? (args.command as string | undefined)
+        ?? (args.shell as string | undefined);
+    const working_dir =
+        (args.working_dir as string | undefined)
+        ?? (args.workingDir as string | undefined)
+        ?? (args.cwd as string | undefined)
+        ?? (args.path as string | undefined);
+    const timeout_secs =
+        (args.timeout_secs as number | undefined)
+        ?? (args.timeoutSecs as number | undefined)
+        ?? (args.timeout as number | undefined);
+
+    if (!cmd || !cmd.trim()) {
+        console.warn('[inference-with-tools] execute_command got no usable cmd. args:', args);
+        return {
+            content: `execute_command failed: required argument "cmd" was missing or empty. Got arguments: ${JSON.stringify(args)}. Call it like: {"cmd": "ls -la", "working_dir": "/path"}.`,
+            isError: true,
+        };
+    }
+    if (!working_dir || !working_dir.trim()) {
+        console.warn('[inference-with-tools] execute_command got no usable working_dir. args:', args);
+        return {
+            content: `execute_command failed: required argument "working_dir" was missing or empty. Got arguments: ${JSON.stringify(args)}. Use an absolute path like "/" or "/Users/you".`,
+            isError: true,
+        };
+    }
 
     const result = await invoke<ExecuteCommandResponse>('execute_command', {
-        cmd: cmd ?? '',
-        workingDir: working_dir ?? '',
+        cmd,
+        workingDir: working_dir,
         timeoutSecs: timeout_secs ?? null,
     });
 
@@ -158,27 +241,86 @@ export async function runInferenceWithTools(
 ): Promise<InferenceResponse> {
     const { onChunk, onToolExecution, onProgress, onConfirmExecution, isCancelled } = options;
 
+    // Per-turn trace id. Tag every log line and outgoing request with it so
+    // a single turn (potentially several inference calls + several tool
+    // executions) can be reconstructed from disjoint Rust/JS logs.
+    const turnId = `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    console.log(`[turn ${turnId}] starting (model=${request.modelConfig.modelId}, messages=${request.messages.length})`);
+
+    const maxIterations = runtimeSettings.maxToolIterations;
     let currentRequest = { ...request };
     let iterations = 0;
     let finalResponse: InferenceResponse | null = null;
     const allToolExecutions: ToolExecutionData[] = [];
 
-    while (iterations < MAX_TOOL_ITERATIONS) {
+    while (iterations < maxIterations) {
         if (isCancelled?.()) {
             throw new Error('Inference cancelled');
         }
         iterations++;
+        console.log(`[turn ${turnId}] iteration ${iterations}: sending ${currentRequest.messages.length} messages`);
 
         const response = await runInference(currentRequest, onChunk, onProgress);
+
+        const respContentLen = (response.message.content ?? '').length;
+        const respToolCalls = response.message.toolCalls?.length ?? 0;
+        console.log(`[turn ${turnId}] iteration ${iterations} response: content=${respContentLen} chars, toolCalls=${respToolCalls}`);
+
+        // Detect a degenerate "nothing returned" response. Some providers do
+        // this when rate-limited, when the prompt exceeds the *real* model
+        // context, or when content is filtered. Without this guard the user
+        // sees a blank assistant bubble and has no idea what happened.
+        if (respContentLen === 0 && respToolCalls === 0) {
+            console.warn(`[turn ${turnId}] empty response from model — likely rate limit, context overflow, or content filter`);
+            return {
+                ...response,
+                message: {
+                    ...response.message,
+                    content:
+                        'The model returned an empty response. Common causes:\n' +
+                        '  • Free-tier rate limit on the provider (try again in a minute, or switch models)\n' +
+                        '  • Prompt exceeded the model\'s real context window (open Settings → Advanced and verify the context window matches the model)\n' +
+                        '  • Content filter on the provider rejected the input/output\n\n' +
+                        `Trace id: ${turnId} — search the dev console for this id to see what was sent.`,
+                    error: 'empty_model_response',
+                },
+            };
+        }
 
         let toolCalls: any[] = [];
 
         if (response.message.toolCalls && response.message.toolCalls.length > 0) {
-            toolCalls = response.message.toolCalls.map((tc: any) => ({
-                id: tc.id,
-                name: tc.function.name,
-                arguments: JSON.parse(tc.function.arguments),
-            }));
+            console.log(
+                '[inference-with-tools] Native toolCalls received:',
+                response.message.toolCalls.map((tc: any) => ({
+                    id: tc.id,
+                    namePreview: typeof tc?.function?.name === 'string'
+                        ? tc.function.name.slice(0, 120)
+                        : tc?.function?.name,
+                    argsType: typeof tc?.function?.arguments,
+                    argsPreview: typeof tc?.function?.arguments === 'string'
+                        ? tc.function.arguments.slice(0, 200)
+                        : JSON.stringify(tc?.function?.arguments).slice(0, 200),
+                })),
+            );
+            toolCalls = response.message.toolCalls.map((tc: any) => {
+                let parsedArgs: Record<string, unknown> = {};
+                const rawArgs = tc?.function?.arguments;
+                if (typeof rawArgs === 'string' && rawArgs.trim()) {
+                    try {
+                        parsedArgs = JSON.parse(rawArgs);
+                    } catch (e) {
+                        console.warn('[inference-with-tools] arguments string was not valid JSON:', rawArgs);
+                    }
+                } else if (rawArgs && typeof rawArgs === 'object') {
+                    parsedArgs = rawArgs;
+                }
+                return {
+                    id: tc.id,
+                    name: tc?.function?.name ?? '',
+                    arguments: parsedArgs,
+                };
+            });
         } else {
             const hasToolCalls = detectToolCall(response.message.content);
 
@@ -188,6 +330,14 @@ export async function runInferenceWithTools(
             }
 
             toolCalls = extractToolCalls(response.message.content);
+            console.log(
+                '[inference-with-tools] Extracted tool calls from content:',
+                toolCalls.map((tc) => ({
+                    id: tc.id,
+                    namePreview: typeof tc.name === 'string' ? tc.name.slice(0, 120) : tc.name,
+                    argKeys: Object.keys(tc.arguments ?? {}),
+                })),
+            );
         }
 
         if (toolCalls.length === 0) {
@@ -203,6 +353,7 @@ export async function runInferenceWithTools(
 
                 if (onToolExecution) {
                     onToolExecution({
+                        id: toolCall.id,
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
                     });
@@ -228,6 +379,7 @@ export async function runInferenceWithTools(
 
                         if (onToolExecution) {
                             onToolExecution({
+                                id: toolCall.id,
                                 toolName: toolCall.name,
                                 arguments: toolCall.arguments,
                                 result: 'Cancelled by user',
@@ -265,6 +417,7 @@ export async function runInferenceWithTools(
 
                 if (onToolExecution) {
                     onToolExecution({
+                        id: toolCall.id,
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
                         result: result.content,
@@ -305,6 +458,7 @@ export async function runInferenceWithTools(
 
                 if (onToolExecution) {
                     onToolExecution({
+                        id: toolCall.id,
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
                         error: error instanceof Error ? error.message : String(error),
@@ -329,7 +483,10 @@ export async function runInferenceWithTools(
     }
 
     if (!finalResponse) {
-        throw new Error('Maximum tool calling iterations reached');
+        throw new Error(
+            `Maximum tool calling iterations reached (${maxIterations}). ` +
+            `Raise this in Settings → Advanced → Agent if the task legitimately needs more steps.`,
+        );
     }
 
     if (allToolExecutions.length > 0) {

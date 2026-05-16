@@ -82,14 +82,25 @@ const HINTS: ContextHint[] = [
     { pattern: /llama[\s\-_]?3\.?2/i, tokens: 131_072, label: 'Llama 3.2' },
     { pattern: /llama[\s\-_]?3\.?1/i, tokens: 131_072, label: 'Llama 3.1' },
     { pattern: /llama[\s\-_]?3/i, tokens: 8_192, label: 'Llama 3' },
+    { pattern: /qwen[\s\-_]?3/i, tokens: 32_768, label: 'Qwen 3' },
     { pattern: /qwen[\s\-_]?2\.?5/i, tokens: 32_768, label: 'Qwen 2.5' },
     { pattern: /qwen/i, tokens: 32_768, label: 'Qwen (generic)' },
     { pattern: /mistral[\s\-_]?(large|nemo)/i, tokens: 128_000, label: 'Mistral Large/Nemo' },
     { pattern: /mistral|mixtral/i, tokens: 32_768, label: 'Mistral / Mixtral' },
     { pattern: /gemma[\s\-_]?2/i, tokens: 8_192, label: 'Gemma 2' },
     { pattern: /gemma/i, tokens: 8_192, label: 'Gemma' },
+    { pattern: /deepseek[\s\-_]?(v3|r1|chat)/i, tokens: 131_072, label: 'DeepSeek V3/R1' },
     { pattern: /deepseek/i, tokens: 65_536, label: 'DeepSeek' },
     { pattern: /phi[\s\-_]?3/i, tokens: 128_000, label: 'Phi-3' },
+    // GLM (Z.ai / OpenRouter). 4.5-Air and 4.5 both have 128K context.
+    { pattern: /glm[\s\-_/]?4\.?5/i, tokens: 131_072, label: 'GLM-4.5' },
+    { pattern: /glm[\s\-_/]?4/i, tokens: 131_072, label: 'GLM-4' },
+    { pattern: /glm/i, tokens: 32_768, label: 'GLM (generic)' },
+    // Other common free-tier OpenRouter routes
+    { pattern: /(grok|x-ai)/i, tokens: 131_072, label: 'Grok' },
+    { pattern: /yi[\s\-_]?(large|coder)/i, tokens: 131_072, label: 'Yi' },
+    { pattern: /command[\s\-_]?r[\s\-_]?plus/i, tokens: 128_000, label: 'Command R+' },
+    { pattern: /command[\s\-_]?r/i, tokens: 128_000, label: 'Command R' },
 ];
 
 export interface ContextWindowSuggestion {
