@@ -15,6 +15,7 @@ mod user_profile;
 mod audit_log;
 mod browser_classify;
 mod browser_commands;
+mod workflow_recorder;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -34,6 +35,7 @@ pub fn run() {
     })
     .manage(ai_commands::InferenceState::default())
     .manage(browser_commands::BrowserSupervisor::default())
+    .manage(workflow_recorder::WorkflowRecorder::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -109,7 +111,15 @@ pub fn run() {
         audit_log::log_browser_action_event,
         // Browser-use harness (M1: read-only RPC to Playwright sidecar)
         browser_commands::browser_rpc,
-        browser_commands::browser_shutdown
+        browser_commands::browser_shutdown,
+        // Workflow capability (M4: recorder + replay; no use cases shipped)
+        workflow_recorder::workflow_recording_start,
+        workflow_recorder::workflow_recording_stop,
+        workflow_recorder::workflow_recording_status,
+        workflow_recorder::workflow_list,
+        workflow_recorder::workflow_load,
+        workflow_recorder::workflow_delete,
+        workflow_recorder::workflow_replay_bind
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

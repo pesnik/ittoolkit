@@ -1,10 +1,15 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { FileSystemContext, FileMetadata } from '@/types/ai-types';
 import { FileExplorer } from '@/components/FileExplorer';
 import { AIPanel } from '@/components/AIPanel';
-import { makeStyles, shorthands, tokens } from '@fluentui/react-components';
+import { BrowserView } from '@/components/BrowserView';
+import { WorkflowsPanel } from '@/components/WorkflowsPanel';
+import { featureFlags } from '@/lib/featureFlags';
+import { makeStyles, shorthands, tokens, Tab, TabList, type SelectTabEvent, type SelectTabData } from '@fluentui/react-components';
+
+type Workspace = 'files' | 'browser' | 'workflows';
 
 const useStyles = makeStyles({
   container: {
@@ -20,6 +25,20 @@ const useStyles = makeStyles({
     flex: 1,
     minWidth: 0,
     height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  workspaceTabs: {
+    flexShrink: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingLeft: '12px',
+    paddingRight: '12px',
+    background: tokens.colorNeutralBackground1,
+  },
+  workspaceBody: {
+    flex: 1,
+    minHeight: '0px',
+    overflow: 'hidden',
   },
   aiPanelContainer: {
     height: '100%',
@@ -56,6 +75,26 @@ export default function Home() {
   // AI Context State
   const [fsContext, setFsContext] = useState<FileSystemContext | undefined>(undefined);
   const [aiPanelPrefill, setAiPanelPrefill] = useState<string>('');
+
+  // Main-pane workspace switch — appears only when the browser-use harness
+  // is enabled (browserAgent flag). Files remains the default.
+  const [workspace, setWorkspace] = useState<Workspace>('files');
+  const showWorkspaceTabs = featureFlags.browserAgent;
+
+  // Auto-switch to BrowserView when a browser_observe event arrives, so the
+  // user sees the page state without manually clicking the tab.
+  useEffect(() => {
+    if (!showWorkspaceTabs) return;
+    const handler = () => {
+      setWorkspace((w) => (w === 'files' ? 'browser' : w));
+    };
+    window.addEventListener('browser-view-update', handler as EventListener);
+    return () => window.removeEventListener('browser-view-update', handler as EventListener);
+  }, [showWorkspaceTabs]);
+
+  const onWorkspaceChange = useCallback((_e: SelectTabEvent, data: SelectTabData) => {
+    setWorkspace(data.value as Workspace);
+  }, []);
 
   const startResizing = React.useCallback(() => {
     if (panelRef.current) {
@@ -121,12 +160,29 @@ export default function Home() {
   return (
     <main className={styles.container}>
       <div className={styles.explorerContainer}>
-        <FileExplorer
-          onToggleAI={toggleAIPanel}
-          isAIPanelOpen={isAIPanelOpen}
-          onContextChange={handleContextChange}
-          onAskAgent={handleAskAgent}
-        />
+        {showWorkspaceTabs && (
+          <TabList
+            className={styles.workspaceTabs}
+            selectedValue={workspace}
+            onTabSelect={onWorkspaceChange}
+          >
+            <Tab value="files">Files</Tab>
+            <Tab value="browser">Browser</Tab>
+            <Tab value="workflows">Workflows</Tab>
+          </TabList>
+        )}
+        <div className={styles.workspaceBody}>
+          {workspace === 'files' && (
+            <FileExplorer
+              onToggleAI={toggleAIPanel}
+              isAIPanelOpen={isAIPanelOpen}
+              onContextChange={handleContextChange}
+              onAskAgent={handleAskAgent}
+            />
+          )}
+          {workspace === 'browser' && <BrowserView />}
+          {workspace === 'workflows' && <WorkflowsPanel />}
+        </div>
       </div>
 
       {isAIPanelOpen && (

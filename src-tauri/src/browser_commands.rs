@@ -244,6 +244,7 @@ pub async fn browser_rpc(
     app: AppHandle,
     request: BrowserRpcRequest,
     state: State<'_, BrowserSupervisor>,
+    recorder: State<'_, crate::workflow_recorder::WorkflowRecorder>,
 ) -> Result<Value, String> {
     // Authoritative classification for audit + future approval-token gating.
     // The frontend already gates write/destructive actions via the
@@ -260,7 +261,23 @@ pub async fn browser_rpc(
 
     let inner = Arc::clone(&state.inner);
     ensure_spawned(Arc::clone(&inner), &app).await?;
-    send_rpc(inner, request.method, request.params).await
+    let result = send_rpc(inner, request.method.clone(), request.params.clone()).await?;
+
+    // Capture into the active workflow recording (if any). Best-effort —
+    // a recording error never fails the actual browser action.
+    let observed_url = result.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let observed_title = result.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    recorder
+        .append(crate::workflow_recorder::WorkflowStep {
+            tool: request.method.clone(),
+            params: request.params,
+            classification: risk.as_str().to_string(),
+            observed_url,
+            observed_title,
+        })
+        .await;
+
+    Ok(result)
 }
 
 /// Tear down the sidecar (UI-initiated, e.g. on app exit or "stop browser").

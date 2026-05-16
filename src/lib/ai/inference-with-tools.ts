@@ -320,6 +320,17 @@ async function executeBrowserTool(
                 screenshot: obs.screenshot,
                 capturedAt: Date.now(),
             });
+            // Notify the main-pane BrowserView so it can update its viewport.
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('browser-view-update', {
+                    detail: {
+                        sessionId,
+                        url: obs.url,
+                        title: obs.title,
+                        screenshot: obs.screenshot,
+                    },
+                }));
+            }
             // The text portion of the tool result. The screenshot rides
             // alongside as a separate image content block — see `images`.
             const lines: string[] = [];
