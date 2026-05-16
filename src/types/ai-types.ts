@@ -101,6 +101,18 @@ export type ToolResultAction =
         suggestedCommand: string;
         /** Absolute working directory for the suggested command. */
         suggestedWorkingDir: string;
+    } }
+  | { type: 'browser_preview'; payload: {
+        /** Tool name (browser_open / browser_navigate / browser_observe / browser_close). */
+        kind: string;
+        url?: string;
+        title?: string;
+        nodeCount?: number;
+        hasScreenshot?: boolean;
+        /** Base64 JPEG. Present on browser_observe in-flight; not persisted. */
+        screenshot?: string;
+        sessionId?: string;
+        [extra: string]: unknown;
     } };
 
 /**
@@ -178,6 +190,11 @@ export interface ChatMessage {
     toolExecutions?: ToolExecutionData[];
     /** Tool calls in OpenAI format (for native function calling) */
     toolCalls?: OpenAIToolCall[];
+    /** Base64-encoded JPEG screenshots attached to this message (browser-use
+     *  vision payload). Wire-format only — not persisted to disk. The Rust
+     *  OpenAI-compatible provider emits these as content[].image_url blocks
+     *  when present; other providers drop them. */
+    images?: string[];
 }
 
 /**
@@ -532,4 +549,10 @@ export interface SavedOpenAIProvider {
      *  threshold and history-trim budget). If omitted, the system falls back
      *  to a conservative default (8K). Auto-suggested from modelName in the UI. */
     contextWindow?: number;
+    /** True when the active model accepts image content blocks (multimodal).
+     *  Required for browser-use tools — without it the agent cannot see the
+     *  screenshots browser_observe returns. Default false; user opts in per
+     *  preset. Recommended models: Claude Sonnet 4.6 / Opus 4.7 via the
+     *  OpenAI-compatible endpoint, GPT-4o / GPT-4.1, Qwen2.5-VL (local). */
+    supportsVision?: boolean;
 }

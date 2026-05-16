@@ -26,6 +26,7 @@ const getTransformerJS = async () => {
 import { buildFileSystemContext } from './context-builder';
 import { getTemplateForMode, buildPrompt } from './prompts';
 import { trimToTokenBudget, DEFAULT_WINDOW_CONFIG } from './memory/windowing';
+import { trimScreenshotPayload } from './memory/screenshot-retention';
 import { featureFlags } from '@/lib/featureFlags';
 import { getCachedUserProfile, buildProfileSystemFragment } from './memory/profile-cache';
 import { computeMemoryBudget } from './memory/budget';
@@ -129,6 +130,146 @@ Constraints (enforced at dispatch):
         },
     },
 };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Browser-use tools (M1 — read-only set: open, navigate, observe, close).
+// browser_act and browser_extract land in M2/M3.
+//
+// These are only registered when:
+//   1. featureFlags.browserAgent is enabled, AND
+//   2. The active model claims vision support (browser_observe returns
+//      screenshots; without vision the model is blind).
+//
+// Risk classification + approval cards arrive with browser_act in M2; the
+// read-only methods here are autonomous (no confirm prompts).
+// ─────────────────────────────────────────────────────────────────────────
+
+const BROWSER_OPEN_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'browser_open',
+        description: `Open (or attach to) a browser session. Returns the session_id you'll pass to subsequent browser_* calls. Sessions persist until browser_close. Use a deterministic session_id ("main", "okta", "m365") so subsequent turns can reuse the same tab.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                session_id: {
+                    type: 'string',
+                    description: 'Identifier for this browser session. Reuse the same id across calls to keep the same tab.',
+                },
+                profile: {
+                    type: 'string',
+                    enum: ['ephemeral', 'persistent'],
+                    description: 'ephemeral (default): fresh profile, no cookies survive. persistent: keep cookies/SSO between runs.',
+                },
+                viewport: {
+                    type: 'object',
+                    properties: {
+                        width: { type: 'number' },
+                        height: { type: 'number' },
+                    },
+                    description: 'Optional viewport size; defaults to 1280x800.',
+                },
+            },
+            required: ['session_id'],
+        },
+    },
+};
+
+const BROWSER_NAVIGATE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'browser_navigate',
+        description: `Navigate the session to a URL. Use absolute http(s):// URLs only. mailto:/tel:/file:/javascript: URLs are blocked. Returns { url, title } after the page settles.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                session_id: { type: 'string' },
+                url: { type: 'string', description: 'Absolute URL starting with http:// or https://.' },
+                wait_until: {
+                    type: 'string',
+                    enum: ['load', 'domcontentloaded', 'networkidle'],
+                    description: 'When to consider navigation finished. Default: domcontentloaded.',
+                },
+            },
+            required: ['session_id', 'url'],
+        },
+    },
+};
+
+const BROWSER_OBSERVE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'browser_observe',
+        description: `Capture the current page state: indexed accessibility tree + screenshot + url + title. This is the model's perception primitive — call it whenever you need to see the page. The ax tree is a flat list of interactive elements with role, name, and an index used by browser_act (M2).`,
+        parameters: {
+            type: 'object',
+            properties: {
+                session_id: { type: 'string' },
+                include_screenshot: {
+                    type: 'boolean',
+                    description: 'Whether to include a base64 JPEG screenshot. Default: true. Disable to save tokens when you only need the AX tree.',
+                },
+                max_elements: {
+                    type: 'number',
+                    description: 'Cap on number of AX nodes returned (default 80, max 200). Increase only when the page legitimately has many controls.',
+                },
+            },
+            required: ['session_id'],
+        },
+    },
+};
+
+const BROWSER_CLOSE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'browser_close',
+        description: `Close the browser session and release Chromium resources. Always call this when you're done — otherwise the session lingers until the app exits.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                session_id: { type: 'string' },
+            },
+            required: ['session_id'],
+        },
+    },
+};
+
+const BROWSER_TOOLS: Tool[] = [
+    BROWSER_OPEN_TOOL,
+    BROWSER_NAVIGATE_TOOL,
+    BROWSER_OBSERVE_TOOL,
+    BROWSER_CLOSE_TOOL,
+];
+
+/**
+ * Decide whether the active model has vision support. For OpenAI-compatible
+ * presets we check the user-set supportsVision flag (defaults to false). For
+ * LlamaCpp we infer from the model id (qwen2.5-vl / llava / vision …). All
+ * other providers are non-vision in M1.
+ */
+function activeModelSupportsVision(modelConfig: ModelConfig): boolean {
+    if (modelConfig.provider === ModelProvider.OpenAICompatible) {
+        try {
+            // Lazy import to avoid SSR issues (savedProviders touches localStorage).
+            const { getActiveProvider } = require('./savedProviders') as {
+                getActiveProvider: () => { supportsVision?: boolean } | undefined;
+            };
+            return !!getActiveProvider()?.supportsVision;
+        } catch {
+            return false;
+        }
+    }
+    if (modelConfig.provider === ModelProvider.LlamaCpp) {
+        const id = (modelConfig.modelId ?? '').toLowerCase();
+        return /(vl|vision|llava|moondream)/.test(id);
+    }
+    return false;
+}
+
+export function canUseBrowserTools(modelConfig: ModelConfig): boolean {
+    if (!featureFlags.browserAgent) return false;
+    return activeModelSupportsVision(modelConfig);
+}
 
 // Native function calling tool: search across the user's prior conversations.
 // Use this when the user references something from a previous chat ("the script
@@ -425,6 +566,9 @@ export async function runInference(
         if (featureFlags.memoryCrossConversationSearch) {
             tools.push(SEARCH_CONVERSATIONS_TOOL);
         }
+        if (canUseBrowserTools(request.modelConfig)) {
+            tools.push(...BROWSER_TOOLS);
+        }
         requestWithSystem = {
             ...requestWithSystem,
             tools,
@@ -480,11 +624,12 @@ function prepareMessages(request: InferenceRequest): ChatMessage[] {
     const windowBudget = budget.historyBudget || DEFAULT_WINDOW_CONFIG.budgetTokens;
 
     if (request.skipSystemPrompt) {
+        const withScreenshotCap = trimScreenshotPayload(request.messages, 3).messages;
         if (featureFlags.memorySlidingWindow) {
-            const trimmed = trimToTokenBudget(request.messages, windowBudget);
+            const trimmed = trimToTokenBudget(withScreenshotCap, windowBudget);
             return trimmed.messages;
         }
-        return request.messages;
+        return withScreenshotCap;
     }
     try {
         const template = getTemplateForMode(request.mode);
@@ -576,7 +721,36 @@ Arguments:
 
 Returns: Array of {id, title, updated, snippets[]} for matching conversations.
 
-Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}`;
+Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}
+
+${canUseBrowserTools(request.modelConfig) ? `## Browser tools (read-only, M1)
+
+The agent can drive a real Chromium browser via four tools. Use them for web-based IT tasks (admin consoles, status pages, knowledge base lookups). All four are autonomous in M1 — no user confirmation needed. (Write actions like clicking and typing arrive in M2 and will prompt for approval.)
+
+### browser_open
+Opens a session (or attaches to an existing one). Always call this first.
+Arguments: session_id (string, required), profile ("ephemeral" | "persistent", optional), viewport (optional).
+Returns: { session_id }.
+
+### browser_navigate
+Loads a URL in the session. Use absolute http(s):// URLs only.
+Arguments: session_id (required), url (required), wait_until ("load" | "domcontentloaded" | "networkidle", optional).
+Returns: { url, title }.
+
+### browser_observe
+Captures page state as { url, title, ax, screenshot }. The ax field is a flat indexed list of interactive elements: [{ index, role, name, value?, description?, leaf, children? }]. Each call replaces the prior screenshot in your view — you'll be shown the latest one. Use after every navigation and after any action that changes the page.
+Arguments: session_id (required), include_screenshot (boolean, default true), max_elements (number, default 80, max 200).
+
+### browser_close
+Releases the Chromium resources. Always call this when finished with a session.
+Arguments: session_id (required).
+
+USAGE PATTERN:
+  1. browser_open {"session_id":"main"}
+  2. browser_navigate {"session_id":"main","url":"https://…"}
+  3. browser_observe {"session_id":"main"}    // see the page
+  4. … reason about the screenshot + ax tree, decide next step
+  5. browser_close {"session_id":"main"}      // when done` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,
@@ -622,8 +796,18 @@ Do NOT call this for things you can answer from the current conversation or curr
             withSystem = [systemMessage, ...request.messages];
         }
 
+        // Cap retained screenshots before any token windowing — older
+        // browser_observe results keep their AX tree (text) but drop the
+        // base64 JPEG to bound token cost across multi-step sessions.
+        const capped = trimScreenshotPayload(withSystem, 3);
+        if (capped.strippedCount > 0) {
+            console.log(
+                `[ai-service] Screenshot retention: stripped ${capped.strippedCount}, retained ${capped.retainedCount}`,
+            );
+        }
+
         if (featureFlags.memorySlidingWindow) {
-            const trimmed = trimToTokenBudget(withSystem, windowBudget);
+            const trimmed = trimToTokenBudget(capped.messages, windowBudget);
             if (trimmed.droppedCount > 0) {
                 console.log(
                     `[ai-service] Memory window dropped ${trimmed.droppedCount} message(s) — ${trimmed.tokensBefore} → ${trimmed.tokensAfter} est. tokens (budget ${windowBudget}, ctx ${budget.contextWindow})`,
@@ -631,7 +815,7 @@ Do NOT call this for things you can answer from the current conversation or curr
             }
             return trimmed.messages;
         }
-        return withSystem;
+        return capped.messages;
     } catch (error) {
         console.error('[ai-service] Error in prepareMessages:', error);
         console.error('[ai-service] Request:', request);

@@ -84,6 +84,11 @@ pub struct ChatMessage {
     /// Tool calls in OpenAI format (for native function calling)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// Base64-encoded JPEG screenshots attached to this message (browser-use
+    /// vision payload). Vision-capable models receive these as
+    /// content[].image_url blocks; non-vision providers drop them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 /// Inference request

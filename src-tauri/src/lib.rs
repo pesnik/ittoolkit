@@ -13,6 +13,7 @@ mod skills;
 mod user_info;
 mod user_profile;
 mod audit_log;
+mod browser_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -31,6 +32,7 @@ pub fn run() {
       Ok(())
     })
     .manage(ai_commands::InferenceState::default())
+    .manage(browser_commands::BrowserSupervisor::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -102,7 +104,11 @@ pub fn run() {
         // User info
         user_info::get_user_name,
         // Audit log for destructive agent actions
-        audit_log::log_action_event
+        audit_log::log_action_event,
+        audit_log::log_browser_action_event,
+        // Browser-use harness (M1: read-only RPC to Playwright sidecar)
+        browser_commands::browser_rpc,
+        browser_commands::browser_shutdown
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

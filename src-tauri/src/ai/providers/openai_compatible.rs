@@ -29,11 +29,34 @@ struct OpenAIChatRequest {
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
-    /// Content can be null when tool_calls are present
-    content: Option<String>,
+    /// Content is either a plain string OR an array of content parts
+    /// (multimodal: text + image_url). Modeled as serde_json::Value so we can
+    /// emit either shape transparently — vision-capable backends accept the
+    /// array form, text-only backends only see the string form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<serde_json::Value>,
     /// Tool calls in the response (OpenAI format)
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<crate::ai::OpenAIToolCall>>,
+}
+
+/// Build a content payload: plain string when no images, multimodal array
+/// (text + image_url data URLs) when images are present.
+fn build_content_payload(text: &str, images: &Option<Vec<String>>) -> serde_json::Value {
+    match images {
+        Some(imgs) if !imgs.is_empty() => {
+            let mut parts: Vec<serde_json::Value> = Vec::with_capacity(imgs.len() + 1);
+            parts.push(serde_json::json!({ "type": "text", "text": text }));
+            for b64 in imgs {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:image/jpeg;base64,{}", b64) }
+                }));
+            }
+            serde_json::Value::Array(parts)
+        }
+        _ => serde_json::Value::String(text.to_string()),
+    }
 }
 
 /// OpenAI chat response format
@@ -96,16 +119,17 @@ pub async fn run_openai_compatible_inference(
                     system_prompts.clear(); // Clear after using
                 }
                 content.push_str(&m.content);
+                let payload = build_content_payload(&content, &m.images);
                 openai_messages.push(OpenAIMessage {
                     role: "user".to_string(),
-                    content: Some(content),
+                    content: Some(payload),
                     tool_calls: None,
                 });
             }
             MessageRole::Assistant => {
                 openai_messages.push(OpenAIMessage {
                     role: "assistant".to_string(),
-                    content: Some(m.content.clone()),
+                    content: Some(serde_json::Value::String(m.content.clone())),
                     tool_calls: m.tool_calls.clone(),
                 });
             }
@@ -131,7 +155,13 @@ pub async fn run_openai_compatible_inference(
         openai_request.messages.iter().map(|m| m.role.as_str()).collect::<Vec<_>>().join(", "),
     );
     let total_content_chars: usize = openai_request.messages.iter()
-        .map(|m| m.content.as_deref().map(|c| c.len()).unwrap_or(0))
+        .map(|m| match &m.content {
+            Some(serde_json::Value::String(s)) => s.len(),
+            Some(serde_json::Value::Array(parts)) => parts.iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()).map(|s| s.len()))
+                .sum(),
+            _ => 0,
+        })
         .sum();
     println!("[OpenAI-Compatible] Total content chars: {}", total_content_chars);
     println!("[OpenAI-Compatible] Tools included: {}", request.tools.is_some());
@@ -199,7 +229,13 @@ pub async fn run_openai_compatible_inference(
 
     println!("[OpenAI-Compatible] Response received");
 
-    let content = choice.message.content.clone().unwrap_or_default();
+    // The OpenAI response content is a string per spec (no multimodal output),
+    // but the field is now Value-typed. Pull the string out defensively.
+    let content = match &choice.message.content {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    };
     println!("[OpenAI-Compatible] Content length: {}", content.len());
     println!("[OpenAI-Compatible] Has tool_calls: {}", choice.message.tool_calls.is_some());
 
@@ -219,6 +255,7 @@ pub async fn run_openai_compatible_inference(
         is_streaming: None,
         error: None,
         tool_calls: choice.message.tool_calls.clone(),
+        images: None,
     };
 
     let usage = openai_response.usage.map(|u| TokenUsage {

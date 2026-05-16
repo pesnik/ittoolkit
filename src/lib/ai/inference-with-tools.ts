@@ -159,6 +159,12 @@ async function executeTool(
     content: string;
     isError: boolean;
     actions?: ToolResultAction[];
+    /** Base64 JPEGs to attach as image content blocks on the tool-result
+     *  message. Populated only by browser_observe today. */
+    images?: string[];
+    /** Pre-built JSON payload the chip preview renders for this tool call.
+     *  Used by browser_* so the UI can show the screenshot + page chip. */
+    preview?: Record<string, unknown>;
 }> {
     const normalized = unwrapNestedToolCall(toolCall);
     console.log('[inference-with-tools] dispatch:', {
@@ -174,6 +180,9 @@ async function executeTool(
     if (normalized.name === 'search_conversations') {
         return executeSearchConversations(normalized.arguments);
     }
+    if (normalized.name.startsWith('browser_')) {
+        return executeBrowserTool(normalized.name, normalized.arguments);
+    }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
@@ -182,6 +191,154 @@ async function executeTool(
         };
     }
     return executeShellCommand(normalized.arguments);
+}
+
+const BROWSER_METHOD_MAP: Record<string, string> = {
+    browser_open: 'browser.open',
+    browser_navigate: 'browser.navigate',
+    browser_observe: 'browser.observe',
+    browser_close: 'browser.close',
+};
+
+interface BrowserObserveResult {
+    url?: string;
+    title?: string;
+    ax?: Array<{ index: number; role: string; name: string; value?: string }>;
+    screenshot?: string;
+}
+
+async function logBrowserAudit(event: {
+    classification: string;
+    method: string;
+    sessionId: string;
+    url?: string;
+    outcome: 'ok' | 'error';
+}): Promise<void> {
+    try {
+        await invoke('log_browser_action_event', {
+            event: {
+                classification: event.classification,
+                method: event.method,
+                sessionId: event.sessionId,
+                skillId: null,
+                url: event.url ?? null,
+                elementRole: null,
+                elementName: null,
+                screenshotSha256: null,
+                approver: null,
+                outcome: event.outcome,
+            },
+        });
+    } catch (e) {
+        console.warn('[inference-with-tools] failed to log browser audit event:', e);
+    }
+}
+
+async function executeBrowserTool(
+    toolName: string,
+    args: Record<string, unknown>,
+): Promise<{
+    content: string;
+    isError: boolean;
+    images?: string[];
+    preview?: Record<string, unknown>;
+}> {
+    const method = BROWSER_METHOD_MAP[toolName];
+    if (!method) {
+        return {
+            content: `Unknown browser tool "${toolName}". Available: browser_open, browser_navigate, browser_observe, browser_close.`,
+            isError: true,
+        };
+    }
+    const sessionId = (args.session_id as string | undefined) ?? '';
+    try {
+        const result = await invoke<unknown>('browser_rpc', {
+            request: { method, params: args },
+        });
+
+        if (toolName === 'browser_observe') {
+            const obs = (result ?? {}) as BrowserObserveResult;
+            const ax = obs.ax ?? [];
+            // The text portion of the tool result. The screenshot rides
+            // alongside as a separate image content block — see `images`.
+            const lines: string[] = [];
+            lines.push(`url: ${obs.url ?? '(unknown)'}`);
+            lines.push(`title: ${obs.title ?? '(unknown)'}`);
+            lines.push(`ax (${ax.length} interactive nodes):`);
+            for (const n of ax.slice(0, 80)) {
+                const parts = [`  [${n.index}] role=${n.role}`];
+                if (n.name) parts.push(`name="${n.name}"`);
+                if (n.value) parts.push(`value="${n.value}"`);
+                lines.push(parts.join(' '));
+            }
+            if (ax.length > 80) {
+                lines.push(`  … ${ax.length - 80} more nodes elided. Use max_elements to expand.`);
+            }
+            const content = lines.join('\n');
+            await logBrowserAudit({
+                classification: 'read',
+                method,
+                sessionId,
+                url: obs.url,
+                outcome: 'ok',
+            });
+            return {
+                content,
+                isError: false,
+                images: obs.screenshot ? [obs.screenshot] : undefined,
+                preview: {
+                    kind: 'browser_observe',
+                    url: obs.url,
+                    title: obs.title,
+                    nodeCount: ax.length,
+                    hasScreenshot: !!obs.screenshot,
+                    // In-flight screenshot for the inline chat preview. Not
+                    // persisted; the retention layer strips this when the
+                    // ToolExecutionData is written to disk.
+                    screenshot: obs.screenshot,
+                    sessionId,
+                },
+            };
+        }
+
+        const summary =
+            toolName === 'browser_navigate'
+                ? `Navigated to ${(result as any)?.url ?? args.url} — ${(result as any)?.title ?? ''}`
+                : toolName === 'browser_open'
+                  ? `Opened browser session "${(result as any)?.session_id ?? sessionId}".`
+                  : toolName === 'browser_close'
+                    ? `Closed browser session "${sessionId}".`
+                    : JSON.stringify(result);
+
+        await logBrowserAudit({
+            classification: 'read',
+            method,
+            sessionId,
+            url: (result as any)?.url,
+            outcome: 'ok',
+        });
+
+        return {
+            content: summary,
+            isError: false,
+            preview: {
+                kind: toolName,
+                ...(typeof result === 'object' && result !== null ? result : {}),
+            },
+        };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await logBrowserAudit({
+            classification: 'read',
+            method,
+            sessionId,
+            outcome: 'error',
+        });
+        return {
+            content: `${toolName} failed: ${message}`,
+            isError: true,
+        };
+    }
 }
 
 /** Handle agent_action tool call: validate arguments at the LLM/UI boundary,
@@ -594,9 +751,19 @@ export async function runInferenceWithTools(
                 if (result.isError) {
                     toolExecution.error = result.content;
                 }
-                if (result.actions?.length) {
-                    toolExecution.actions = result.actions;
+                // Tools may emit either structured `actions` (agent_action) or
+                // a `preview` blob (browser_*). We surface them through the
+                // same `actions` channel so existing UI consumers keep working;
+                // browser previews are tagged with a distinct action type.
+                const surfacedActions: ToolResultAction[] = [];
+                if (result.actions?.length) surfacedActions.push(...result.actions);
+                if (result.preview) {
+                    surfacedActions.push({
+                        type: 'browser_preview',
+                        payload: result.preview as Extract<ToolResultAction, { type: 'browser_preview' }>['payload'],
+                    });
                 }
+                if (surfacedActions.length) toolExecution.actions = surfacedActions;
 
                 allToolExecutions.push(toolExecution);
 
@@ -608,7 +775,7 @@ export async function runInferenceWithTools(
                         result: result.content,
                         error: result.isError ? result.content : undefined,
                         executionTimeMs,
-                        actions: result.actions?.length ? result.actions : undefined,
+                        actions: surfacedActions.length ? surfacedActions : undefined,
                     });
                 }
 
@@ -617,6 +784,7 @@ export async function runInferenceWithTools(
                     role: MessageRole.User,
                     content: formatToolResult(toolCall.name, result.content, result.isError),
                     timestamp: Date.now(),
+                    images: result.images,
                 };
 
                 toolResults.push(toolResultMessage);
