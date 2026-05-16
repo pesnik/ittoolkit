@@ -494,9 +494,53 @@ function prepareMessages(request: InferenceRequest): ChatMessage[] {
             ? buildFileSystemContext(request.fsContext)
             : 'No file system context available.';
 
-    const executeCommandDesc = `## execute_command Tool
+    const executeCommandDesc = `## Two tools, two jobs
 
-You have access to the \`execute_command\` tool which runs shell commands on the user's machine.
+Think of \`agent_action\` and \`execute_command\` as a pair:
+- Use **\`execute_command\`** to *gather* information from the file system (sizes, listings, contents).
+- Use **\`agent_action\`** to *present* paths the user can click and to *propose* destructive operations as inline cards. Plain markdown paths are dead text; the user cannot click them.
+
+If your reply mentions a path, you owe an \`agent_action\` for it. If you are proposing a delete / move / overwrite, you owe an \`agent_action(confirm_action)\` with a complete \`suggestedCommand\` — never ask "should I delete X?" in chat.
+
+## agent_action Tool
+
+Emit a structured action the app renders natively (clickable chips, confirmation cards, navigation, file highlights). The app gates user safety; you focus on intent.
+
+Tool: agent_action
+Arguments:
+  - action (string, REQUIRED): one of "navigate", "open_file", "highlight", "confirm_action".
+  - paths (array of strings, REQUIRED): one or more absolute paths (POSIX "/…" or Windows "C:\\…"). For navigate/open_file the app uses paths[0].
+  - title (string, REQUIRED for confirm_action): plain text, ≤ 500 chars.
+  - description (string, REQUIRED for confirm_action): plain text body, ≤ 500 chars.
+  - suggestedCommand (string, REQUIRED for confirm_action): the EXACT shell command the app will run verbatim if the user clicks Execute. Use single-quoted paths to handle spaces.
+  - suggestedWorkingDir (string, REQUIRED for confirm_action): absolute working directory for suggestedCommand.
+  - totalSize (number, optional): total bytes; used for the card display.
+  - severity (string, optional): "low" | "medium" | "high". Defaults to "medium" if omitted. The app auto-escalates to "high" for system paths (/System, /usr, /Library, C:\\Windows, …) or operations over 10 GiB / 50 paths regardless of what you claim.
+
+Hard limits enforced at dispatch (the call fails if you exceed them):
+- ≤ 5 agent_action calls per model response. Batch related paths into one confirm_action where possible.
+- Paths must be absolute, free of newlines / NUL bytes, ≤ 4096 chars.
+- suggestedCommand must not contain embedded newlines.
+
+Example — after \`du -sh ~/Library ~/Documents\`:
+  agent_action {"action":"navigate","paths":["/Users/you/Library"]}
+  agent_action {"action":"navigate","paths":["/Users/you/Documents"]}
+
+Example — proposing a cache cleanup (do this INSTEAD of asking in text):
+  agent_action {
+    "action":"confirm_action",
+    "paths":["/Users/you/Library/Caches"],
+    "title":"Clear app caches",
+    "description":"Removes contents of ~/Library/Caches. Apps regenerate caches; no user data lost.",
+    "suggestedCommand":"rm -rf '/Users/you/Library/Caches'/*",
+    "suggestedWorkingDir":"/",
+    "severity":"medium",
+    "totalSize":271390000
+  }
+
+## execute_command Tool
+
+Run shell commands to gather information. After any command returns paths the user might care about, follow up with one or more agent_action calls.
 
 Tool: execute_command
 Description: Execute a shell command on the file system. Use this for ALL file operations including reading, writing, searching, listing, moving, and analyzing files and directories.
@@ -519,23 +563,7 @@ IMPORTANT USAGE RULES:
 - Default timeout is 30 seconds. Use timeout_secs for long-running operations.
 - Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.
 - File-reading commands (cat/less/more/head/tail/bat/od/xxd/strings) and write/move commands (rm/mv/cp/dd, shell redirects) prompt the user for explicit approval before executing.
-
-## agent_action Tool
-
-Emit a structured action that the app renders natively as clickable paths, confirmation dialogs, or file highlights. Use this INSTEAD of writing file paths in plain text — the user can click, browse, and confirm visually.
-
-Tool: agent_action
-Arguments:
-  - action (string, required): "navigate" (browse folder), "open_file" (open file), "highlight" (mark items), "confirm_action" (confirmation dialog).
-  - paths (array of strings, required): One or more file paths.
-  - title (string, optional): Confirmation dialog title.
-  - description (string, optional): Confirmation dialog body text.
-  - totalSize (number, optional): Total bytes for dialog display.
-  - severity (string, optional): "low", "medium", or "high".
-
-Returns: Confirmation that the action was rendered.
-
-IMPORTANT: Always call this tool for any file paths you want the user to interact with. Plain text paths are not clickable.
+- For destructive operations the preferred path is NOT direct \`execute_command\` — emit an \`agent_action(confirm_action)\` instead so the user sees an inline card.
 
 ${featureFlags.memoryCrossConversationSearch ? `## search_conversations Tool
 

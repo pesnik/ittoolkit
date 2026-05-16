@@ -69,10 +69,42 @@ The locations below are safe-to-clean (caches/logs regenerated on demand). Measu
 ## Workflow
 
 1. **Measure first.** Use `du -sh <path>` on each candidate. Report sizes back to the user.
-2. **Ask.** Don't propose to delete until the user has seen sizes and picked targets.
-3. **Confirm per-target.** For each chosen path, state exactly what you'll run before running it.
-4. **Clear with `rm -rf <path>/*`** — *contents* of the directory, never the directory itself.
+2. **Surface clickable chips.** After each `du -sh`, emit one `agent_action(navigate)` per row so the user can click and browse — see "Surfacing results" below. Do NOT just list paths in markdown; they are not clickable.
+3. **Propose via card, not chat.** When the user is ready to clean a target, emit ONE `agent_action(confirm_action)` with the literal `rm -rf` line as `suggestedCommand`. The app renders an inline Execute/Dismiss card and runs the captured command verbatim on approval. Do NOT type "should I delete X?" — the card IS the question.
+4. **Clear with `rm -rf <path>/*`** — *contents* of the directory, never the directory itself. This goes in `suggestedCommand`, not as a direct `execute_command` call.
 5. **Verify.** Re-run `df -h` and show the delta.
+
+## Surfacing results to the user
+
+The app has first-class UI for paths and destructive proposals. The skill MUST use it.
+
+**After every `du -sh` that returned paths**, emit one navigate chip per row:
+
+```
+agent_action {"action":"navigate","paths":["/Users/<you>/Library"]}
+agent_action {"action":"navigate","paths":["/Users/<you>/Documents"]}
+```
+
+Up to 5 `agent_action` calls per response (validator-enforced). If you have more, pick the top 5 by size.
+
+**Before proposing any cleanup**, emit one confirm card. Example for clearing user-cache contents:
+
+```
+agent_action {
+  "action": "confirm_action",
+  "paths": ["/Users/<you>/Library/Caches"],
+  "title": "Clear ~/Library/Caches",
+  "description": "Removes contents of ~/Library/Caches (~259 MB). Apps regenerate caches on next launch; no user data is affected.",
+  "suggestedCommand": "rm -rf '/Users/<you>/Library/Caches'/*",
+  "suggestedWorkingDir": "/",
+  "severity": "medium",
+  "totalSize": 271390000
+}
+```
+
+The user clicks **Execute** or **Dismiss** on the card. On Execute the app runs `suggestedCommand` verbatim through the same security gate as `execute_command` (no `sudo`, no system paths). You do not re-issue the command — the app feeds you back the actual exit code and output, and you continue from there.
+
+Severity guidance: the app auto-escalates to `high` for system paths (`/System`, `/usr`, `/Library`, `C:\Windows`) and for operations over ~10 GiB or 50 paths. Pick `medium` for normal user-cache cleanups; pick `high` explicitly for anything that loses regenerable-but-slow state (Xcode DerivedData, package manager caches).
 
 ## What NOT to do
 
