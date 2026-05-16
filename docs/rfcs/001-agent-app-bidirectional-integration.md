@@ -157,3 +157,71 @@ The file explorer and AI panel are siblings under `page.tsx`. A CustomEvent avoi
 - Existing `FileExplorer` continues working unmodified (the event subscriber is additive)
 - Existing skills continue working unmodified (the `agent_action` tool is additive)
 - Existing `ChatMessage` with `contextPaths` starts being populated where it was previously empty
+
+---
+
+## Implementation notes (appended at merge review)
+
+This section was added during the tech-lead review before merging into `main`. It documents the hardening applied on top of the original design so the constraints aren't lost in commit history.
+
+### Validator at the LLM ↔ UI boundary
+
+`executeAgentAction` in `src/lib/ai/inference-with-tools.ts` validates every argument before any structured action reaches the UI. The boundary is the only place model output is trusted, so all checks live here:
+
+- `action` must be one of the four literal enum values; unknown values return a tool error the model can recover from.
+- `paths` must be absolute (POSIX `"/…"`, `~/…`, or Windows `"C:\…"`), free of NUL / CR / LF, ≤ 4096 chars each, deduplicated.
+- `title` and `description` go through `plainText(s, 500)` which strips `\p{Cc}` control chars and clamps length. Downstream consumers (chips, audit log, aria-labels) can treat these as safe plain text.
+- For `confirm_action`, `suggestedCommand` and `suggestedWorkingDir` are **required**. The command the user sees on the card is the exact bytes the app will run on approval — see "Structured approval" below.
+- `severity` defaults to `'medium'` (not `'low'`) when omitted. The model may over-claim risk but never under-claim.
+
+### Severity escalation
+
+`escalateSeverity(claimed, paths, totalSize)` picks the higher of the model's claim vs. a derived floor. The floor is forced to `'high'` when:
+
+- any path matches `^/(System|usr|bin|sbin|etc|Library|var|boot|opt|root)/`
+- any path matches Windows `C:\Windows`, `C:\Program Files`, `C:\ProgramData`
+- `totalSize >= 10 GiB`
+- `paths.length >= 50`
+
+The card shows the escalated severity, the badge color reflects it, and the audit log records both the claimed and the resolved value via the action ID.
+
+### Per-turn action budget
+
+A `TurnBudget` object (default `{ actionsRemaining: 5 }`) is created at each iteration of `runInferenceWithTools` and threaded through `executeTool`. A model that emits more than 5 `agent_action` calls in one response will receive a tool error on the sixth and beyond — preventing a misbehaving prompt from flooding the chat with chips or cards.
+
+### Structured approval (no chat replay)
+
+The original branch sent `"**Action Confirmed:** <id>"` as a freeform user message and asked the model to "proceed with the operation as described," which forced the destructive command to be reconstructed from the model's memory of its own earlier turn. That is racy (file system can change between emit and re-issue) and prompt-injectable (any intervening text could nudge the model toward a different command).
+
+The current flow:
+
+1. The agent emits `agent_action(confirm_action, …, suggestedCommand, suggestedWorkingDir)`.
+2. `AIPanel.onToolExecution` captures the action into `pendingActionsRef: Map<actionId, PendingAgentAction>`.
+3. The user sees the card and clicks **Execute** or **Dismiss**.
+4. On Execute, `handleToolActionResponse` invokes `execute_command` directly with the stored `suggestedCommand` / `suggestedWorkingDir` — byte-for-byte what the user saw — and feeds the actual output back to the model as a continuation message.
+5. On Dismiss, a structured rejection ("Do NOT run `<cmd>`") goes back to the model.
+
+The `pendingActionsRef` entry is deleted on use so a double-click can't run the command twice. The model never has the chance to swap the command in between.
+
+### Audit log
+
+`~/.ittoolkit/audit.jsonl` records one row per `emit` / `confirm` / `dismiss` event, with the action ID linking all three. `confirm` rows include the exit code so failures are traceable. The file rotates at 5 MiB and is local-only — nothing leaves the machine. See `src-tauri/src/audit_log.rs`.
+
+### Unconditional shell guardrail
+
+`agent_action(confirm_action)` is layered on top of, not in place of, `shell_classify::is_blocked()` in `src-tauri/src/execute_command.rs`. The unconditional refusal layer (commit `3c6e099`) tokenizes the command, resolves wrappers (`sudo`, `env`, `find -exec`, `sh -c`, `$(…)`), and rejects the worst categories regardless of how they got there. This is the single source of truth for "never run this" and remains the last gate before `sh -c`. The earlier ad-hoc blocklist that the integration branch tried to introduce was dropped at merge.
+
+### Path extraction in the UI
+
+Free-text regex path extraction was removed from `ToolCallDisplay`. Paths-with-spaces (common on macOS volumes like `/Volumes/Time Machine Backups/…`) confused the regex into emitting truncated chips. The chip extractor now consumes:
+
+1. **Structured `agent_action` results first** — when present, these are the source of truth.
+2. **Tab-separated tool output (`du`/`ls`/`find`/`stat`/`wc` only)** — fall back here because that output shape is unambiguous.
+
+For any other command output, the agent is expected to emit a structured action.
+
+### Out of scope for this merge
+
+- A test harness for the action bus and validator (filed as follow-up; the repo has zero tests today and adding the harness shouldn't ride this merge).
+- Replacing `CustomEvent` with a real store. Premature for the current panel set.
+- Migrating to AG-UI / A2UI / MCP-Apps protocols. Worth a future RFC if vendor-protocol compatibility becomes a goal.
