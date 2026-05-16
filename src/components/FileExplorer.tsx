@@ -61,6 +61,7 @@ import { listen } from '@tauri-apps/api/event';
 import { FileNode } from '@/types';
 import { FileMetadata } from '@/types/ai-types';
 import { ThemeToggle } from './ThemeToggle';
+import { onAgentAction } from '@/lib/agent/action-bus';
 
 const useStyles = makeStyles({
     container: {
@@ -287,9 +288,13 @@ interface FileExplorerProps {
     onToggleAI?: () => void;
     isAIPanelOpen?: boolean;
     onContextChange?: (path: string, selectedItems: string[], visibleFiles?: FileMetadata[]) => void;
+    /** Called when user clicks "Ask Agent" from the file explorer with
+     *  selected items. The parent can open the AI panel and send a message
+     *  with the selected paths as context. */
+    onAskAgent?: (selectedPaths: string[], currentPath: string) => void;
 }
 
-export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: FileExplorerProps) => {
+export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange, onAskAgent }: FileExplorerProps) => {
     const styles = useStyles();
     const [state, setState] = React.useState<ExplorerState>({
         path: 'C:\\',
@@ -514,6 +519,17 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };
+    }, []);
+
+    // Subscribe to agent-action events (agent → file explorer navigation)
+    React.useEffect(() => {
+        const unsub = onAgentAction((action) => {
+            if (action.type === 'navigate') {
+                const path = action.payload.path as string;
+                if (path) handleNavigate(path);
+            }
+        });
+        return unsub;
     }, []);
 
     const handleNavigate = (newPath: string) => {
@@ -919,6 +935,18 @@ export const FileExplorer = ({ onToggleAI, isAIPanelOpen, onContextChange }: Fil
                                 onClick={() => setSelectedItems(new Set())}
                             >
                                 Clear
+                            </Button>
+                            <Button
+                                appearance="primary"
+                                size="small"
+                                icon={<SparkleRegular />}
+                                onClick={() => {
+                                    const selectedArray = Array.from(selectedItems).map(id => String(id));
+                                    onAskAgent?.(selectedArray, state.path);
+                                }}
+                                disabled={!onAskAgent}
+                            >
+                                Ask Agent
                             </Button>
                         </>
                     )}

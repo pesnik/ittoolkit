@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { FileSystemContext, FileMetadata } from '@/types/ai-types';
 import { FileExplorer } from '@/components/FileExplorer';
 import { AIPanel } from '@/components/AIPanel';
@@ -55,6 +55,7 @@ export default function Home() {
 
   // AI Context State
   const [fsContext, setFsContext] = useState<FileSystemContext | undefined>(undefined);
+  const [aiPanelPrefill, setAiPanelPrefill] = useState<string>('');
 
   const startResizing = React.useCallback(() => {
     if (panelRef.current) {
@@ -91,6 +92,14 @@ export default function Home() {
     });
   }, []);
 
+  const handleAskAgent = useCallback((selectedPaths: string[], currentPath: string) => {
+    const paths = selectedPaths.map(p => `${currentPath}/${p}`).join('\n');
+    setAiPanelPrefill(paths);
+    if (!isAIPanelOpen) {
+      setIsAIPanelOpen(true);
+    }
+  }, [isAIPanelOpen]);
+
   const toggleAIPanel = () => {
     const newState = !isAIPanelOpen;
     setIsAIPanelOpen(newState);
@@ -116,6 +125,7 @@ export default function Home() {
           onToggleAI={toggleAIPanel}
           isAIPanelOpen={isAIPanelOpen}
           onContextChange={handleContextChange}
+          onAskAgent={handleAskAgent}
         />
       </div>
 
@@ -143,6 +153,7 @@ export default function Home() {
           isOpen={isAIPanelOpen}
           onClose={toggleAIPanel}
           fsContext={fsContext}
+          prefillInput={aiPanelPrefill}
         />
       </div>
     </main>

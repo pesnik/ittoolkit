@@ -78,6 +78,19 @@ export interface ModelParameters {
 }
 
 /**
+ *  Tool result action — structured, machine-readable data the agent emits
+ *  alongside human-readable text. The UI subscribes to these via the agent
+ *  action bus and renders them as interactive elements (chips, navigation,
+ *  native dialogs).
+ */
+export type ToolResultAction =
+  | { type: 'navigate'; payload: { path: string } }
+  | { type: 'render_tree'; payload: { root: string; totalSize: number; entries: Array<{ path: string; size: number; isDir: boolean }> } }
+  | { type: 'open_file'; payload: { path: string } }
+  | { type: 'highlight'; payload: { paths: string[]; reason?: string } }
+  | { type: 'confirm_action'; payload: { title: string; description: string; items: string[]; totalSize: number; severity: 'low' | 'medium' | 'high'; actionId: string } };
+
+/**
  * Tool execution data for display
  */
 export interface ToolExecutionData {
@@ -91,6 +104,9 @@ export interface ToolExecutionData {
     error?: string;
     executionTimeMs?: number;
     status: 'executing' | 'success' | 'error' | 'cancelled';
+    /** Structured actions the agent emitted alongside text. The UI renders
+     *  these as interactive chips, navigation targets, dialogs, etc. */
+    actions?: ToolResultAction[];
 }
 
 /**

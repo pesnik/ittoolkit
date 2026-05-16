@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { InferenceRequest, InferenceResponse, ChatMessage, MessageRole, ToolExecutionData } from '@/types/ai-types';
+import { InferenceRequest, InferenceResponse, ChatMessage, MessageRole, ToolExecutionData, ToolResultAction } from '@/types/ai-types';
 import { runInference } from './ai-service';
 import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags } from './tool-calling';
 import { runtimeSettings } from '@/lib/runtimeSettings';
@@ -86,6 +86,7 @@ function unwrapNestedToolCall(toolCall: {
 async function executeTool(toolCall: { name: string; arguments: Record<string, unknown> }): Promise<{
     content: string;
     isError: boolean;
+    actions?: ToolResultAction[];
 }> {
     const normalized = unwrapNestedToolCall(toolCall);
     console.log('[inference-with-tools] dispatch:', {
@@ -95,17 +96,79 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
         argsPreview: JSON.stringify(normalized.arguments).slice(0, 200),
     });
 
+    if (normalized.name === 'agent_action') {
+        return executeAgentAction(normalized.arguments);
+    }
     if (normalized.name === 'search_conversations') {
         return executeSearchConversations(normalized.arguments);
     }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "agent_action" (action, paths). Use one of these exact names.`,
             isError: true,
         };
     }
     return executeShellCommand(normalized.arguments);
+}
+
+/** Handle agent_action tool call: parse the action from arguments and return
+ *  it as a structured action so the UI renders it natively. */
+function executeAgentAction(args: Record<string, unknown>): {
+    content: string;
+    isError: boolean;
+    actions: ToolResultAction[];
+} {
+    const action = (args.action as string) || 'navigate';
+    const paths = (args.paths as string[]) || [];
+
+    if (action === 'navigate' || action === 'open_file') {
+        const path = paths[0];
+        if (!path) {
+            return {
+                content: 'agent_action: no path provided for navigate/open_file.',
+                isError: true,
+                actions: [],
+            };
+        }
+        return {
+            content: `Action emitted: ${action} to ${path}`,
+            isError: false,
+            actions: [{ type: action, payload: { path } }],
+        };
+    }
+
+    if (action === 'highlight') {
+        return {
+            content: `Action emitted: highlight ${paths.length} path(s).`,
+            isError: false,
+            actions: [{ type: 'highlight', payload: { paths } }],
+        };
+    }
+
+    if (action === 'confirm_action') {
+        return {
+            content: `Action emitted: confirm_action — ${args.title || 'untitled'}`,
+            isError: false,
+            actions: [{
+                type: 'confirm_action',
+                payload: {
+                    title: (args.title as string) || 'Confirm action',
+                    description: (args.description as string) || '',
+                    items: paths,
+                    totalSize: (args.totalSize as number) || 0,
+                    severity: (args.severity as 'low' | 'medium' | 'high') || 'low',
+                    actionId: `agent-${Date.now()}`,
+                },
+            }],
+        };
+    }
+
+    return {
+        content: `Unknown agent_action type: "${action}". Valid types: navigate, open_file, highlight, confirm_action.`,
+        isError: true,
+        actions: [],
+    };
 }
 
 async function executeShellCommand(args: Record<string, unknown>): Promise<{
@@ -159,7 +222,10 @@ async function executeShellCommand(args: Record<string, unknown>): Promise<{
         content += result.stderr;
     }
 
-    const isError = result.exit_code !== 0 || result.timed_out;
+    // Exit code 1 with stdout is NOT an error — tools like du, grep, and diff
+    // use exit code 1 for informational purposes (missing paths, no matches).
+    // Only exit code 2+ or exit code 1 without stdout is a real error.
+    const isError = result.timed_out || (result.exit_code !== 0 && (result.exit_code > 1 || !result.stdout));
 
     if (!content) {
         if (result.timed_out) {
@@ -387,6 +453,9 @@ export async function runInferenceWithTools(
                 toolExecution.executionTimeMs = executionTimeMs;
                 if (result.isError) {
                     toolExecution.error = result.content;
+                }
+                if (result.actions?.length) {
+                    toolExecution.actions = result.actions;
                 }
 
                 allToolExecutions.push(toolExecution);

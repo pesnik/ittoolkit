@@ -344,6 +344,9 @@ interface AIChatProps {
     placeholder?: string;
     loadingStatus?: React.ReactNode;
     skills?: SkillManifest[];
+    /** Non-empty value pre-fills the chat input box. Used by "Ask Agent" to
+     *  paste selected file paths so the user can type their intent. */
+    prefillInput?: string;
 }
 
 export function AIChat({
@@ -355,9 +358,21 @@ export function AIChat({
     placeholder = 'Ask about your files...',
     loadingStatus = 'Thinking...',
     skills = [],
+    prefillInput,
 }: AIChatProps) {
     const styles = useStyles();
     const [inputValue, setInputValue] = useState('');
+
+    // Consume prefillInput: when the prop gets a new non-empty value, set it as
+    // the input value so the user can edit before sending.
+    const consumedRef = useRef<string | undefined>(undefined);
+    useEffect(() => {
+        if (prefillInput && prefillInput !== consumedRef.current) {
+            consumedRef.current = prefillInput;
+            setInputValue(prefillInput);
+        }
+    }, [prefillInput]);
+
     const [greeting, setGreeting] = useState<string>(() => pickGreeting('there'));
     const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
     const [paletteDismissed, setPaletteDismissed] = useState(false);
