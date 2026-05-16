@@ -26,6 +26,7 @@ const getTransformerJS = async () => {
 import { buildFileSystemContext } from './context-builder';
 import { getTemplateForMode, buildPrompt } from './prompts';
 import { trimToTokenBudget, DEFAULT_WINDOW_CONFIG } from './memory/windowing';
+import { trimScreenshotPayload } from './memory/screenshot-retention';
 import { featureFlags } from '@/lib/featureFlags';
 import { getCachedUserProfile, buildProfileSystemFragment } from './memory/profile-cache';
 import { computeMemoryBudget } from './memory/budget';
@@ -480,11 +481,12 @@ function prepareMessages(request: InferenceRequest): ChatMessage[] {
     const windowBudget = budget.historyBudget || DEFAULT_WINDOW_CONFIG.budgetTokens;
 
     if (request.skipSystemPrompt) {
+        const withScreenshotCap = trimScreenshotPayload(request.messages, 3).messages;
         if (featureFlags.memorySlidingWindow) {
-            const trimmed = trimToTokenBudget(request.messages, windowBudget);
+            const trimmed = trimToTokenBudget(withScreenshotCap, windowBudget);
             return trimmed.messages;
         }
-        return request.messages;
+        return withScreenshotCap;
     }
     try {
         const template = getTemplateForMode(request.mode);
@@ -622,8 +624,18 @@ Do NOT call this for things you can answer from the current conversation or curr
             withSystem = [systemMessage, ...request.messages];
         }
 
+        // Cap retained screenshots before token windowing — older
+        // computer_screenshot / browser_observe results keep their text but
+        // drop the base64 JPEG to bound token cost across multi-step sessions.
+        const capped = trimScreenshotPayload(withSystem, 3);
+        if (capped.strippedCount > 0) {
+            console.log(
+                `[ai-service] Screenshot retention: stripped ${capped.strippedCount}, retained ${capped.retainedCount}`,
+            );
+        }
+
         if (featureFlags.memorySlidingWindow) {
-            const trimmed = trimToTokenBudget(withSystem, windowBudget);
+            const trimmed = trimToTokenBudget(capped.messages, windowBudget);
             if (trimmed.droppedCount > 0) {
                 console.log(
                     `[ai-service] Memory window dropped ${trimmed.droppedCount} message(s) — ${trimmed.tokensBefore} → ${trimmed.tokensAfter} est. tokens (budget ${windowBudget}, ctx ${budget.contextWindow})`,
@@ -631,7 +643,7 @@ Do NOT call this for things you can answer from the current conversation or curr
             }
             return trimmed.messages;
         }
-        return withSystem;
+        return capped.messages;
     } catch (error) {
         console.error('[ai-service] Error in prepareMessages:', error);
         console.error('[ai-service] Request:', request);

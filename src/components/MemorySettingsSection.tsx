@@ -35,6 +35,21 @@ interface FlagDescriptor {
     description: string;
 }
 
+const COMPUTER_USE_FLAGS: FlagDescriptor[] = [
+    {
+        key: 'computerUseAgent',
+        label: 'Computer-use harness',
+        description:
+            'Let the agent take screenshots and control the mouse/keyboard via enigo + xcap, with a local UI-TARS grounding model picking coordinates from natural-language targets. Every write action (click, type, key) requires user approval. Requires a vision-capable model (mark the active saved provider as Supports vision) and ideally a separate grounder preset (Use as UI grounder).',
+    },
+    {
+        key: 'mcpServer',
+        label: 'MCP server (expose tools to other agents)',
+        description:
+            'Start a Model Context Protocol server (Unix socket / named pipe) that exposes ittoolkit’s tools — shell, browser, computer — to external MCP clients such as Claude Desktop, Open Interpreter, Cursor, etc. Off by default; the connection string is shown in Settings when enabled.',
+    },
+];
+
 const MEMORY_FLAGS: FlagDescriptor[] = [
     {
         key: 'memorySlidingWindow',
@@ -223,6 +238,36 @@ export const MemorySettingsSection: React.FC = () => {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <AgentSection />
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div>
+                    <Text weight="semibold" size={400}>
+                        Computer Use &amp; MCP
+                    </Text>
+                    <Text
+                        size={200}
+                        block
+                        style={{ color: tokens.colorNeutralForeground3, marginTop: '4px' }}
+                    >
+                        Native desktop control (screen / mouse / keyboard) and Model Context
+                        Protocol interop. Both are off by default — turn them on alongside a
+                        vision-capable saved provider, and ideally a local UI-TARS grounder preset.
+                    </Text>
+                </div>
+                <Divider style={{ margin: '8px 0' }} />
+                {COMPUTER_USE_FLAGS.map((flag) => (
+                    <React.Fragment key={flag.key}>
+                        <FlagRow
+                            descriptor={flag}
+                            onToggle={handleToggle}
+                            onReset={handleReset}
+                            value={featureFlags[flag.key]}
+                            overridden={isFeatureFlagOverridden(flag.key)}
+                        />
+                        <Divider />
+                    </React.Fragment>
+                ))}
+            </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div>

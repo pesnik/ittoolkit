@@ -178,6 +178,11 @@ export interface ChatMessage {
     toolExecutions?: ToolExecutionData[];
     /** Tool calls in OpenAI format (for native function calling) */
     toolCalls?: OpenAIToolCall[];
+    /** Base64-encoded JPEG screenshots attached to this message (vision
+     *  payload for computer_screenshot / future browser_observe). Wire-only
+     *  — not persisted to disk. The OpenAI-compatible Rust provider emits
+     *  these as content[].image_url blocks; non-vision providers drop them. */
+    images?: string[];
 }
 
 /**
@@ -532,4 +537,14 @@ export interface SavedOpenAIProvider {
      *  threshold and history-trim budget). If omitted, the system falls back
      *  to a conservative default (8K). Auto-suggested from modelName in the UI. */
     contextWindow?: number;
+    /** True when the model accepts image content blocks (multimodal). Required
+     *  for the computer-use harness — without it, computer_screenshot is
+     *  invisible to the model. Recommended for Claude Sonnet 4.6 / Opus 4.7,
+     *  GPT-4o, Qwen2.5-VL, etc. Default false. */
+    supportsVision?: boolean;
+    /** True when this preset hosts a UI-grounding model (e.g. UI-TARS-7B via
+     *  llama.cpp). The computer-use harness routes click-prediction prompts
+     *  here. Independent of supportsVision — a grounder is a vision model
+     *  but with a different role in the agent stack. Default false. */
+    useAsGrounder?: boolean;
 }

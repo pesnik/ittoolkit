@@ -31,6 +31,13 @@ interface FeatureFlagsShape {
     memoryCrossConversationSearch: boolean;
     /** Phase 5 memory: decay stale facts and annotate old summaries. */
     memoryForgetting: boolean;
+    /** Computer-use harness (Phase 2): native screen/mouse/keyboard tools
+     *  driven by enigo + xcap with an OmniParser → UI-TARS grounding chain.
+     *  Off by default — opt-in per user (high blast radius). */
+    computerUseAgent: boolean;
+    /** Expose this app as an MCP server (Unix socket / named pipe) so external
+     *  clients (Claude Desktop, Open Interpreter, etc.) can drive its tools. */
+    mcpServer: boolean;
 }
 
 const DEFAULTS: FeatureFlagsShape = {
@@ -40,6 +47,8 @@ const DEFAULTS: FeatureFlagsShape = {
     memoryUserProfile: true,
     memoryCrossConversationSearch: true,
     memoryForgetting: true,
+    computerUseAgent: false,
+    mcpServer: false,
 };
 
 const STORAGE_KEY = 'ittoolkit.featureFlags';

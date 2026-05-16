@@ -225,6 +225,8 @@ interface FormState {
     modelName: string;
     isDefault: boolean;
     contextWindow?: number;
+    supportsVision: boolean;
+    useAsGrounder: boolean;
 }
 
 const emptyForm: FormState = {
@@ -234,6 +236,8 @@ const emptyForm: FormState = {
     modelName: '',
     isDefault: false,
     contextWindow: undefined,
+    supportsVision: false,
+    useAsGrounder: false,
 };
 
 export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedProvidersPanelProps) {
@@ -281,6 +285,8 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
             modelName: p.modelName,
             isDefault: p.isDefault,
             contextWindow: p.contextWindow,
+            supportsVision: !!p.supportsVision,
+            useAsGrounder: !!p.useAsGrounder,
         });
     };
 
@@ -366,6 +372,8 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
             modelName: editing.modelName,
             isDefault: editing.isDefault,
             contextWindow: editing.contextWindow,
+            supportsVision: editing.supportsVision,
+            useAsGrounder: editing.useAsGrounder,
         });
         if (!getActiveProviderId()) {
             setActiveProviderId(saved.id);
@@ -470,6 +478,36 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
                         />
                         Use as default on app start
                     </Label>
+
+                    <div>
+                        <Label>
+                            <input
+                                type="checkbox"
+                                checked={editing.supportsVision}
+                                onChange={(e) => setEditing({ ...editing, supportsVision: e.target.checked })}
+                                style={{ marginRight: '8px' }}
+                            />
+                            Model supports vision (image inputs)
+                        </Label>
+                        <Text size={200} style={{ display: 'block', color: tokens.colorNeutralForeground3, marginLeft: '24px' }}>
+                            Required for the computer-use harness — without it, screenshots stay invisible to the model. Examples: Claude Sonnet 4.6 / Opus 4.7, GPT-4o, Qwen2.5-VL, UI-TARS-7B.
+                        </Text>
+                    </div>
+
+                    <div>
+                        <Label>
+                            <input
+                                type="checkbox"
+                                checked={editing.useAsGrounder}
+                                onChange={(e) => setEditing({ ...editing, useAsGrounder: e.target.checked })}
+                                style={{ marginRight: '8px' }}
+                            />
+                            Use as UI grounder (click-prediction model)
+                        </Label>
+                        <Text size={200} style={{ display: 'block', color: tokens.colorNeutralForeground3, marginLeft: '24px' }}>
+                            Route computer-use click-prediction prompts to this preset. Pair with a local model trained for GUI grounding (e.g. UI-TARS-7B-DPO-Q4_K_M.gguf via llama.cpp). Independent of "supports vision" — a grounder typically runs on a local provider while the chat preset stays remote.
+                        </Text>
+                    </div>
                 </div>
 
                 {testResult && (

@@ -459,6 +459,7 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
             is_streaming: Some(false),
             error: None,
             tool_calls,
+            images: None,
         },
         is_complete: true,
         usage,
