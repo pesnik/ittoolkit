@@ -290,6 +290,28 @@ const COMPUTER_KEY_TOOL: Tool = {
     },
 };
 
+const COMPUTER_FIND_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_find',
+        description: `Locate a UI element on screen by natural-language description and return its (x, y) coordinates WITHOUT clicking. The harness pipes the screenshot through OmniParser (candidate bounding boxes) and then a local UI-TARS grounder model (via the saved provider marked "Use as UI grounder") which picks the centroid. Use this when the planner knows what to click but not where — then pass the returned coords to computer_left_click / etc. Classified as read (autonomous). Returns { x, y, ok: true } on success, or { ok: false, reason } if grounding failed (no grounder preset configured, perception unavailable, model returned non-coordinate output).`,
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Natural-language target description, e.g. "Reset button next to ada@acme.com" or "the close X in the top-right of the dialog".',
+                },
+                display_index: {
+                    type: 'number',
+                    description: 'Optional display index for the screenshot (omit for primary).',
+                },
+            },
+            required: ['query'],
+        },
+    },
+};
+
 const COMPUTER_SCROLL_TOOL: Tool = {
     type: 'function',
     function: {
@@ -319,6 +341,7 @@ const COMPUTER_TOOLS: Tool[] = [
     COMPUTER_TYPE_TOOL,
     COMPUTER_KEY_TOOL,
     COMPUTER_SCROLL_TOOL,
+    COMPUTER_FIND_TOOL,
 ];
 
 function activeModelSupportsVision(modelConfig: ModelConfig): boolean {
@@ -812,11 +835,27 @@ Arguments: none.
 Returns { x, y } in virtual-desktop coordinates. Useful before computer_screenshot to know where the user is looking. On Wayland-only Linux this returns a clear error (no global cursor API) — handle gracefully.
 Arguments: none.
 
-USAGE PATTERN (CU-M2 read-only):
-  1. computer_screen_size   # learn the display layout
+## Write tools (CU-M3)
+
+computer_mouse_move, computer_left_click, computer_right_click, computer_middle_click, computer_double_click, computer_left_click_drag, computer_type, computer_key, computer_scroll — every one requires user approval and pauses 250 ms before dispatch so the user can hit Esc x3 or the floating kill switch. The approval card shows the most recent screenshot and a one-line intent (e.g. "Left-click at (842, 318)"). If the user denies, do not retry — ask them why instead.
+
+## Grounding (CU-M4)
+
+computer_find takes a natural-language target ("Reset button next to ada@acme.com", "the close X on the top-right of the dialog") and returns (x, y) coordinates without clicking. Internally: screenshot → optional OmniParser perception → local UI-TARS grounder picks coordinates. Use this to bridge "I know what to click" and "I know where to click":
+
+  1. computer_screenshot         # see the screen
+  2. computer_find {"query":"Reset button"}
+  3. computer_left_click {"x":<x>, "y":<y>}  # still triggers approval
+
+If computer_find returns ok=false with reason=no_grounder, the user has not configured a UI-TARS grounder preset — surface that as a setup step, do not retry.
+
+GENERAL USAGE PATTERN:
+  1. computer_screen_size   # multi-monitor only
   2. computer_screenshot    # see the screen
-  3. … reason about the screenshot
-  Tell the user what you observed in plain language. Do not promise to click or type yet — those tools arrive in CU-M3.` : ''}`;
+  3. computer_find / direct coords  # pick a target
+  4. computer_left_click / type / key   # act (approval required)
+  5. computer_screenshot    # verify the change
+` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

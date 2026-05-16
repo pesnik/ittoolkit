@@ -15,6 +15,7 @@ mod user_profile;
 mod audit_log;
 mod computer_classify;
 mod computer_commands;
+mod perception_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -34,6 +35,7 @@ pub fn run() {
     })
     .manage(ai_commands::InferenceState::default())
     .manage(computer_commands::ComputerState::default())
+    .manage(perception_commands::PerceptionSupervisor::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -120,7 +122,10 @@ pub fn run() {
         computer_commands::computer_type,
         computer_commands::computer_key,
         computer_commands::computer_scroll,
-        computer_commands::computer_kill
+        computer_commands::computer_kill,
+        // Perception sidecar (CU-M4: OmniParser → UI-TARS grounding chain)
+        perception_commands::perception_rpc,
+        perception_commands::perception_shutdown
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

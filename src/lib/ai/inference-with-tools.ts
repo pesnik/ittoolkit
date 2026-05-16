@@ -51,6 +51,215 @@ export interface InferenceWithToolsOptions {
  *  when a new screenshot lands. */
 let LATEST_COMPUTER_SCREENSHOT: string | undefined;
 
+interface PerceptionElement {
+    bbox: [number, number, number, number];
+    role: string;
+    text: string;
+}
+
+interface PerceptionParseResult {
+    elements: PerceptionElement[];
+    ready: boolean;
+    width?: number;
+    height?: number;
+}
+
+async function callPerception(screenshotB64: string): Promise<PerceptionParseResult | null> {
+    try {
+        const result = await invoke<PerceptionParseResult>('perception_rpc', {
+            request: {
+                method: 'perception.parse',
+                params: { image: screenshotB64 },
+            },
+        });
+        return result;
+    } catch (err) {
+        // Sidecar unavailable (no python, install missing, crash, etc.) —
+        // log and continue. UI-TARS does the grounding alone.
+        console.warn('[computer_find] perception sidecar unavailable; falling back to UI-TARS-only grounding:', err);
+        return null;
+    }
+}
+
+/** Parse a coordinate from a UI-TARS / vision-LM response. Accepts:
+ *    {"x": 842, "y": 318}
+ *    (842, 318)
+ *    Click at 842,318
+ *    The button is at x=842, y=318
+ *  Returns null when no plausible (x, y) is found. */
+function parseCoords(text: string): { x: number; y: number } | null {
+    const jsonMatch = text.match(/\{[^{}]*"x"\s*:\s*(-?\d+)[^{}]*"y"\s*:\s*(-?\d+)[^{}]*\}/);
+    if (jsonMatch) {
+        return { x: parseInt(jsonMatch[1], 10), y: parseInt(jsonMatch[2], 10) };
+    }
+    const parenMatch = text.match(/\((-?\d+)\s*,\s*(-?\d+)\)/);
+    if (parenMatch) {
+        return { x: parseInt(parenMatch[1], 10), y: parseInt(parenMatch[2], 10) };
+    }
+    const labeledMatch = text.match(/x\s*[:=]\s*(-?\d+)\D+y\s*[:=]\s*(-?\d+)/i);
+    if (labeledMatch) {
+        return { x: parseInt(labeledMatch[1], 10), y: parseInt(labeledMatch[2], 10) };
+    }
+    return null;
+}
+
+async function executeComputerFind(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+    images?: string[];
+    preview?: Record<string, unknown>;
+}> {
+    const query = String(args.query ?? '').trim();
+    if (!query) {
+        return { content: 'computer_find: required argument "query" is missing or empty.', isError: true };
+    }
+
+    // 1. Grounder preset lookup. The user marks a saved provider with
+    //    "Use as UI grounder" in Settings → AI → Saved Providers; typically
+    //    this points at a local UI-TARS-7B GGUF via llama.cpp.
+    let grounder: { modelName: string; endpoint: string; apiKey: string; contextWindow?: number } | undefined;
+    try {
+        const { getGrounderProvider } = require('./savedProviders') as {
+            getGrounderProvider: () => {
+                modelName: string; endpoint: string; apiKey: string; contextWindow?: number;
+            } | undefined;
+        };
+        grounder = getGrounderProvider();
+    } catch {
+        grounder = undefined;
+    }
+    if (!grounder) {
+        return {
+            content:
+                `computer_find: no grounder preset configured. Open Settings → AI → Saved Providers, ` +
+                `edit a provider that hosts a UI grounding model (e.g. UI-TARS-7B-DPO-Q4_K_M.gguf via llama.cpp), ` +
+                `and check "Use as UI grounder".`,
+            isError: true,
+            preview: { kind: 'computer_find', ok: false, reason: 'no_grounder' },
+        };
+    }
+
+    // 2. Capture the screen.
+    let screenshot: { screenshot: string; width: number; height: number } | undefined;
+    try {
+        const shot = await invoke<ComputerScreenshotResult>('computer_screenshot', {
+            displayIndex: typeof args.display_index === 'number' ? args.display_index : null,
+        });
+        screenshot = shot;
+        LATEST_COMPUTER_SCREENSHOT = shot.screenshot;
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('computer-view-update', {
+                detail: {
+                    screenshot: shot.screenshot,
+                    width: shot.width,
+                    height: shot.height,
+                    displayIndex: shot.displayIndex,
+                },
+            }));
+        }
+    } catch (err) {
+        return {
+            content: `computer_find: screenshot failed: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+        };
+    }
+
+    // 3. Optional perception step. When the sidecar is unavailable or has
+    //    no models loaded we proceed with UI-TARS-only grounding — that
+    //    still works, OmniParser just narrows the candidate set.
+    const perception = await callPerception(screenshot.screenshot);
+    const candidateLines = perception?.elements?.length
+        ? perception.elements
+              .slice(0, 40)
+              .map((e, i) =>
+                  `  [${i}] role=${e.role} bbox=(${e.bbox.join(',')})${e.text ? ` text="${e.text}"` : ''}`,
+              )
+              .join('\n')
+        : null;
+
+    // 4. UI-TARS grounding prompt. Kept generic so it works against any
+    //    GUI-grounding model (UI-TARS, Show-UI, CogAgent, etc.) — they all
+    //    accept "screenshot + target → coordinates".
+    const prompt = [
+        `You are a GUI-grounding model. The user has shown you a screenshot of their screen.`,
+        `Width: ${screenshot.width}px, Height: ${screenshot.height}px.`,
+        `Find the on-screen element that best matches this target:`,
+        ``,
+        `Target: ${query}`,
+        ``,
+        candidateLines
+            ? `Candidate elements detected by perception:\n${candidateLines}\n\nPick the bounding box whose center best matches the target.`
+            : `No pre-detected candidates — locate the target directly from the screenshot.`,
+        ``,
+        `Respond with JSON only: {"x": <int>, "y": <int>} — the center pixel of the target. ` +
+            `Coordinates are in screenshot pixels, top-left origin.`,
+    ].join('\n');
+
+    // 5. Dispatch through runInference with the grounder preset overriding
+    //    modelConfig. We import lazily to avoid a circular dependency with
+    //    ai-service.ts (which already imports this module).
+    let raw = '';
+    try {
+        const { runInference } = require('./ai-service') as typeof import('./ai-service');
+        const response = await runInference({
+            sessionId: `computer-find-${Date.now()}`,
+            modelConfig: {
+                id: 'grounder',
+                name: 'UI grounder',
+                provider: 'llamacpp' as any, // run_ai_inference dispatches by provider string
+                modelId: grounder.modelName,
+                parameters: { temperature: 0.0, topP: 0.9, maxTokens: 64, stream: false },
+                endpoint: grounder.endpoint,
+                apiKey: grounder.apiKey || undefined,
+                isAvailable: true,
+                recommendedFor: [],
+            } as any,
+            messages: [{
+                id: `grounder-msg-${Date.now()}`,
+                role: 'user' as any,
+                content: prompt,
+                timestamp: Date.now(),
+                images: [screenshot.screenshot],
+            } as any],
+            mode: 'agent' as any,
+            skipSystemPrompt: true,
+            suppressTools: true,
+        });
+        raw = response.message.content ?? '';
+    } catch (err) {
+        return {
+            content: `computer_find: grounder inference failed: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+            preview: { kind: 'computer_find', ok: false, reason: 'grounder_failed' },
+        };
+    }
+
+    // 6. Parse coordinates out of the grounder's response.
+    const coords = parseCoords(raw);
+    if (!coords) {
+        return {
+            content: `computer_find: grounder model "${grounder.modelName}" did not return parseable coordinates. Raw response: ${raw.slice(0, 200)}`,
+            isError: true,
+            preview: { kind: 'computer_find', ok: false, reason: 'no_coords', raw: raw.slice(0, 200) },
+        };
+    }
+
+    const content = `Found target "${query}" at (${coords.x}, ${coords.y}). Pass these coords to computer_left_click / right_click / etc. — they still require approval.`;
+    return {
+        content,
+        isError: false,
+        preview: {
+            kind: 'computer_find',
+            ok: true,
+            x: coords.x,
+            y: coords.y,
+            query,
+            perceptionReady: perception?.ready ?? false,
+            grounder: grounder.modelName,
+        },
+    };
+}
+
 // Classification of which shell commands need a confirmation prompt is
 // delegated to ./shell-classify. That module tokenizes the command and
 // resolves wrappers (sudo/env/timeout/sh -c/find -exec/xargs/eval/$(…))
@@ -299,6 +508,9 @@ async function executeComputerTool(
                 isError: false,
                 preview: { kind: 'computer_cursor_position', x: result.x, y: result.y },
             };
+        }
+        if (toolName === 'computer_find') {
+            return executeComputerFind(args);
         }
         // Write tools — invoke the matching Tauri command. Approval has
         // already been granted by the time we reach here (the loop gates

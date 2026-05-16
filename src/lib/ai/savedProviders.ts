@@ -86,6 +86,13 @@ export function getActiveProvider(): SavedOpenAIProvider | undefined {
     return getDefaultProvider();
 }
 
+/** Find the saved provider flagged as the UI grounder for the
+ *  computer-use harness (typically a local UI-TARS GGUF via llama.cpp).
+ *  Returns the first such preset; undefined if none configured. */
+export function getGrounderProvider(): SavedOpenAIProvider | undefined {
+    return readAll().find((p) => p.useAsGrounder);
+}
+
 export interface ProviderInput {
     id?: string;
     name: string;
