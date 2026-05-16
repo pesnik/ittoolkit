@@ -115,7 +115,6 @@ const HIGH_RISK_PATH_COUNT = 50;
  *  hidden newlines, escape sequences, or grow unbounded. */
 function plainText(value: unknown, maxLen: number): string {
     if (typeof value !== 'string') return '';
-    // eslint-disable-next-line no-control-regex
     const cleaned = value.replace(/\p{Cc}+/gu, ' ').replace(/\s+/g, ' ').trim();
     return cleaned.length > maxLen ? cleaned.slice(0, maxLen - 1) + '…' : cleaned;
 }
