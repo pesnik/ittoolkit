@@ -32,6 +32,12 @@ pub struct ConversationFrontmatter {
     pub mode: Option<String>,
     pub created: String,
     pub updated: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_through_timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_updated_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,6 +51,12 @@ pub struct ConversationSummary {
     pub created: String,
     pub updated: String,
     pub file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_through_timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_updated_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -82,6 +94,12 @@ pub struct Conversation {
     pub updated: String,
     pub file_path: String,
     pub messages: Vec<StoredMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_through_timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_updated_at: Option<String>,
 }
 
 fn slugify_title(title: &str) -> String {
@@ -169,6 +187,9 @@ fn serialize_conversation(conv: &Conversation) -> Result<String, String> {
         mode: conv.mode.clone(),
         created: conv.created.clone(),
         updated: conv.updated.clone(),
+        summary: conv.summary.clone(),
+        summary_through_timestamp: conv.summary_through_timestamp,
+        summary_updated_at: conv.summary_updated_at.clone(),
     };
     let yaml = serde_yaml::to_string(&fm)
         .map_err(|e| format!("Failed to serialize frontmatter: {}", e))?;
@@ -369,6 +390,9 @@ fn load_conversation_from_path(path: &Path) -> Result<Conversation, String> {
         updated: fm.updated,
         file_path: path.to_string_lossy().to_string(),
         messages,
+        summary: fm.summary,
+        summary_through_timestamp: fm.summary_through_timestamp,
+        summary_updated_at: fm.summary_updated_at,
     })
 }
 
@@ -399,6 +423,9 @@ pub fn list_conversations() -> Result<Vec<ConversationSummary>, String> {
                 created: fm.created,
                 updated: fm.updated,
                 file_path: path.to_string_lossy().to_string(),
+                summary: fm.summary,
+                summary_through_timestamp: fm.summary_through_timestamp,
+                summary_updated_at: fm.summary_updated_at,
             }),
             Err(e) => warn!("Skipping malformed conversation {:?}: {}", path, e),
         }
@@ -441,6 +468,9 @@ pub fn create_conversation(
         updated: iso,
         file_path: path.to_string_lossy().to_string(),
         messages: vec![first_message],
+        summary: None,
+        summary_through_timestamp: None,
+        summary_updated_at: None,
     };
 
     let content = serialize_conversation(&conv)?;
@@ -472,4 +502,88 @@ pub fn update_conversation_title(id: String, title: String) -> Result<(), String
 pub fn delete_conversation(id: String) -> Result<(), String> {
     let path = find_conversation_path(&id)?;
     fs::remove_file(&path).map_err(|e| format!("Failed to delete: {}", e))
+}
+
+#[command]
+pub fn update_conversation_summary(
+    id: String,
+    summary: String,
+    summary_through_timestamp: i64,
+) -> Result<(), String> {
+    let path = find_conversation_path(&id)?;
+    let mut conv = load_conversation_from_path(&path)?;
+    let now = Utc::now().to_rfc3339();
+    conv.summary = if summary.trim().is_empty() { None } else { Some(summary) };
+    conv.summary_through_timestamp = Some(summary_through_timestamp);
+    conv.summary_updated_at = Some(now.clone());
+    conv.updated = now;
+    let content = serialize_conversation(&conv)?;
+    atomic_write(&path, &content)
+}
+
+/// Plain-text grep across saved conversations. Returns matching snippets
+/// ordered by recency (most recently updated first). Backs the Phase 4
+/// search_conversations tool the model can call.
+#[command]
+pub fn search_conversations_content(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<ConversationSearchHit>, String> {
+    let needle = query.trim();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let needle_lower = needle.to_lowercase();
+    let dir = conversations_dir()?;
+    let mut hits: Vec<ConversationSearchHit> = Vec::new();
+    let entries = fs::read_dir(&dir).map_err(|e| format!("Failed to read dir: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let (fm, body) = match split_frontmatter(&content) {
+            Ok(parts) => parts,
+            Err(_) => continue,
+        };
+        let mut matches: Vec<String> = Vec::new();
+        for line in body.lines() {
+            if line.to_lowercase().contains(&needle_lower) {
+                let snippet = if line.len() > 200 {
+                    format!("{}…", &line[..200])
+                } else {
+                    line.to_string()
+                };
+                matches.push(snippet);
+                if matches.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        if !matches.is_empty() {
+            hits.push(ConversationSearchHit {
+                id: fm.id,
+                title: fm.title,
+                updated: fm.updated,
+                snippets: matches,
+            });
+        }
+    }
+    hits.sort_by(|a, b| b.updated.cmp(&a.updated));
+    let cap = limit.unwrap_or(5).min(20);
+    hits.truncate(cap);
+    Ok(hits)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSearchHit {
+    pub id: String,
+    pub title: String,
+    pub updated: String,
+    pub snippets: Vec<String>,
 }

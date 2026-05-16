@@ -37,6 +37,85 @@ import {
     validateProvider,
 } from '@/lib/ai/savedProviders';
 import { runInference, createMessage } from '@/lib/ai/ai-service';
+import {
+    COMMON_CONTEXT_WINDOWS,
+    DEFAULT_CONTEXT_WINDOW,
+    computeMemoryBudget,
+    formatTokens,
+    suggestContextWindow,
+} from '@/lib/ai/memory/budget';
+
+interface ContextWindowFieldProps {
+    modelName: string;
+    value: number | undefined;
+    onChange: (next: number | undefined) => void;
+}
+
+const ContextWindowField: React.FC<ContextWindowFieldProps> = ({ modelName, value, onChange }) => {
+    const suggestion = React.useMemo(() => suggestContextWindow(modelName), [modelName]);
+    const effective = value ?? DEFAULT_CONTEXT_WINDOW;
+    const budget = React.useMemo(() => computeMemoryBudget(effective, 2048), [effective]);
+    const isDefaulted = value === undefined;
+
+    const parseInput = (raw: string): number | undefined => {
+        const trimmed = raw.trim();
+        if (!trimmed) return undefined;
+        const n = parseInt(trimmed, 10);
+        if (Number.isNaN(n) || n <= 0) return undefined;
+        return n;
+    };
+
+    return (
+        <Field
+            label="Context window"
+            hint={
+                isDefaulted
+                    ? `Falls back to ${formatTokens(DEFAULT_CONTEXT_WINDOW)}. Summarize at ~${formatTokens(budget.summarizeThreshold)}, trim history to ${formatTokens(budget.historyBudget)}.`
+                    : `Summarize at ~${formatTokens(budget.summarizeThreshold)}, trim history to ${formatTokens(budget.historyBudget)} (output reserve ${formatTokens(budget.reservedOutputTokens)}).`
+            }
+        >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <Input
+                        type="number"
+                        value={value === undefined ? '' : String(value)}
+                        placeholder={`auto (${formatTokens(DEFAULT_CONTEXT_WINDOW)})`}
+                        onChange={(_, data) => onChange(parseInput(data.value))}
+                        style={{ maxWidth: '180px' }}
+                    />
+                    {suggestion && value !== suggestion.tokens && (
+                        <Button
+                            size="small"
+                            appearance="subtle"
+                            onClick={() => onChange(suggestion.tokens)}
+                        >
+                            Use {formatTokens(suggestion.tokens)} ({suggestion.label})
+                        </Button>
+                    )}
+                    {value !== undefined && (
+                        <Button size="small" appearance="subtle" onClick={() => onChange(undefined)}>
+                            Reset
+                        </Button>
+                    )}
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {COMMON_CONTEXT_WINDOWS.map((c) => (
+                        <Badge
+                            key={c.tokens}
+                            appearance={value === c.tokens ? 'filled' : 'outline'}
+                            size="small"
+                            color={value === c.tokens ? 'brand' : 'subtle'}
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => onChange(c.tokens)}
+                        >
+                            {c.label}
+                        </Badge>
+                    ))}
+                </div>
+            </div>
+        </Field>
+    );
+};
 
 const useStyles = makeStyles({
     root: {
@@ -145,6 +224,7 @@ interface FormState {
     apiKey: string;
     modelName: string;
     isDefault: boolean;
+    contextWindow?: number;
 }
 
 const emptyForm: FormState = {
@@ -153,6 +233,7 @@ const emptyForm: FormState = {
     apiKey: '',
     modelName: '',
     isDefault: false,
+    contextWindow: undefined,
 };
 
 export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedProvidersPanelProps) {
@@ -199,6 +280,7 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
             apiKey: p.apiKey,
             modelName: p.modelName,
             isDefault: p.isDefault,
+            contextWindow: p.contextWindow,
         });
     };
 
@@ -283,6 +365,7 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
             apiKey: editing.apiKey,
             modelName: editing.modelName,
             isDefault: editing.isDefault,
+            contextWindow: editing.contextWindow,
         });
         if (!getActiveProviderId()) {
             setActiveProviderId(saved.id);
@@ -371,6 +454,12 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
                             onChange={(_, data) => setEditing({ ...editing, modelName: data.value })}
                         />
                     </Field>
+
+                    <ContextWindowField
+                        modelName={editing.modelName}
+                        value={editing.contextWindow}
+                        onChange={(v) => setEditing({ ...editing, contextWindow: v })}
+                    />
 
                     <Label>
                         <input

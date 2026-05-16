@@ -231,6 +231,12 @@ export interface InferenceRequest {
     tools?: Tool[];
     /** Pre-formatted skill catalog injected into the {available_skills} prompt variable */
     skillCatalog?: string;
+    /** Skip the agent system prompt + memory windowing. Used by internal calls
+     *  like summarization that bring their own system message. */
+    skipSystemPrompt?: boolean;
+    /** Skip tool injection. Used by internal calls that should not have access
+     *  to execute_command (summarization, fact extraction). */
+    suppressTools?: boolean;
 }
 
 /**
@@ -414,6 +420,10 @@ export interface ConversationSummary {
     created: string;
     updated: string;
     filePath: string;
+    /** Running synthesis of the conversation; covers messages with timestamp <= summaryThroughTimestamp. */
+    summary?: string;
+    summaryThroughTimestamp?: number;
+    summaryUpdatedAt?: string;
 }
 
 /**
@@ -421,6 +431,35 @@ export interface ConversationSummary {
  */
 export interface Conversation extends ConversationSummary {
     messages: StoredMessage[];
+}
+
+/**
+ * A durable fact remembered about the user across conversations (Phase 3 memory).
+ */
+export interface ProfileFact {
+    id: string;
+    text: string;
+    createdAt: string;
+    lastReinforcedAt: string;
+    reinforcementCount: number;
+}
+
+/**
+ * The user profile — small set of durable facts injected into every conversation.
+ */
+export interface UserProfile {
+    facts: ProfileFact[];
+    lastUpdatedAt?: string;
+}
+
+/**
+ * Hit returned by the cross-conversation search tool (Phase 4 memory).
+ */
+export interface ConversationSearchHit {
+    id: string;
+    title: string;
+    updated: string;
+    snippets: string[];
 }
 
 /**
@@ -456,4 +495,8 @@ export interface SavedOpenAIProvider {
     isDefault: boolean;
     createdAt: number;
     updatedAt: number;
+    /** Provider-specific context window in tokens (drives the summarization
+     *  threshold and history-trim budget). If omitted, the system falls back
+     *  to a conservative default (8K). Auto-suggested from modelName in the UI. */
+    contextWindow?: number;
 }

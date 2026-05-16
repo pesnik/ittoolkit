@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
     ChatMessage,
     Conversation,
+    ConversationSearchHit,
     ConversationSummary,
     MessageRole,
     StoredMessage,
@@ -94,4 +95,26 @@ export async function updateConversationTitle(id: string, title: string): Promis
 
 export async function deleteConversation(id: string): Promise<void> {
     return invoke<void>('delete_conversation', { id });
+}
+
+export async function updateConversationSummary(
+    id: string,
+    summary: string,
+    summaryThroughTimestamp: number,
+): Promise<void> {
+    return invoke<void>('update_conversation_summary', {
+        id,
+        summary,
+        summaryThroughTimestamp,
+    });
+}
+
+export async function searchConversationsContent(
+    query: string,
+    limit?: number,
+): Promise<ConversationSearchHit[]> {
+    return invoke<ConversationSearchHit[]>('search_conversations_content', {
+        query,
+        limit,
+    });
 }

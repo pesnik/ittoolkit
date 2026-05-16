@@ -58,7 +58,17 @@ import {
     appendMessage as persistAppendMessage,
     loadConversation,
     fromStoredMessage,
+    updateConversationSummary,
 } from '@/lib/conversations/store';
+import {
+    applySummaryToOutgoing,
+    generateConversationSummary,
+    shouldSummarize,
+    SummaryState,
+} from '@/lib/ai/memory/summary';
+import { extractFactsFromConversation, mergeUserProfileFacts } from '@/lib/ai/memory/profile';
+import { refreshUserProfileCache } from '@/lib/ai/memory/profile-cache';
+import { computeMemoryBudget } from '@/lib/ai/memory/budget';
 import {
     listSkills,
     loadSkillBody,
@@ -184,9 +194,18 @@ export const AIPanel = ({
     // calls live inside the same handleSendMessage closure, so without a ref the
     // assistant call would see a stale `null` and create a second conversation file.
     const activeConversationIdRef = useRef<string | null>(null);
+    // Tracks the running summary attached to the active conversation. Read at
+    // send time to prepend the summary, written after summarization completes.
+    const summaryStateRef = useRef<SummaryState | null>(null);
+    // Guards against running two summarizations concurrently for the same chat
+    // (e.g. user spams messages while a summary call is still in flight).
+    const summarizingRef = useRef(false);
     const setActiveConversation = useCallback((id: string | null) => {
         activeConversationIdRef.current = id;
         setActiveConversationId(id);
+        if (id === null) {
+            summaryStateRef.current = null;
+        }
     }, []);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
     const [historyVisible, setHistoryVisible] = useState(false);
@@ -494,6 +513,13 @@ export const AIPanel = ({
         }
     }, [showSettings, refreshSkills]);
 
+    // Phase 3: warm the user profile cache so the next inference call can
+    // synchronously read it inside prepareMessages.
+    useEffect(() => {
+        if (!featureFlags.memoryUserProfile) return;
+        void refreshUserProfileCache();
+    }, []);
+
     const handleNewChat = useCallback(() => {
         setActiveConversation(null);
         setMessages([]);
@@ -504,6 +530,13 @@ export const AIPanel = ({
             const conv = await loadConversation(id);
             setActiveConversation(conv.id);
             setMessages(conv.messages.map(fromStoredMessage));
+            summaryStateRef.current = conv.summary
+                ? {
+                    summary: conv.summary,
+                    summaryThroughTimestamp: conv.summaryThroughTimestamp,
+                    summaryUpdatedAt: conv.summaryUpdatedAt,
+                }
+                : null;
         } catch (e) {
             console.error('[AIPanel] Failed to load conversation:', e);
         }
@@ -530,6 +563,64 @@ export const AIPanel = ({
             }
         },
         [setActiveConversation]
+    );
+
+    const extractingFactsRef = useRef(false);
+
+    const runBackgroundFactExtraction = useCallback(
+        async (recentMessages: ChatMessage[], modelConfig: ModelConfig) => {
+            if (extractingFactsRef.current) return;
+            extractingFactsRef.current = true;
+            try {
+                const facts = await extractFactsFromConversation(recentMessages, modelConfig);
+                if (facts.length === 0) return;
+                await mergeUserProfileFacts(facts);
+                console.log('[AIPanel] Merged profile facts', facts);
+            } catch (e) {
+                console.warn('[AIPanel] Fact extraction failed:', e);
+            } finally {
+                extractingFactsRef.current = false;
+            }
+        },
+        [],
+    );
+
+    const runBackgroundSummarization = useCallback(
+        async (
+            fullHistory: ChatMessage[],
+            modelConfig: ModelConfig,
+            conversationId: string | null,
+        ) => {
+            if (!conversationId) return;
+            if (summarizingRef.current) return;
+            summarizingRef.current = true;
+            try {
+                const previous = summaryStateRef.current?.summary;
+                const lastTimestamp = fullHistory[fullHistory.length - 1]?.timestamp ?? Date.now();
+                const summary = await generateConversationSummary(
+                    fullHistory,
+                    modelConfig,
+                    previous,
+                );
+                if (!summary) return;
+                await updateConversationSummary(conversationId, summary, lastTimestamp);
+                summaryStateRef.current = {
+                    summary,
+                    summaryThroughTimestamp: lastTimestamp,
+                    summaryUpdatedAt: new Date().toISOString(),
+                };
+                console.log('[AIPanel] Updated conversation summary', {
+                    conversationId,
+                    throughTimestamp: lastTimestamp,
+                    chars: summary.length,
+                });
+            } catch (e) {
+                console.warn('[AIPanel] Summarization failed:', e);
+            } finally {
+                summarizingRef.current = false;
+            }
+        },
+        [],
     );
 
     const handleStopGeneration = async () => {
@@ -681,6 +772,15 @@ export const AIPanel = ({
                 }
             }
 
+            // Resolve effective contextWindow: saved preset (for OpenAI-compatible)
+            // beats the model's hardcoded value; either beats the default fallback
+            // applied inside computeMemoryBudget.
+            let presetContextWindow: number | undefined;
+            if (activeProvider === ModelProvider.OpenAICompatible) {
+                const preset = getActiveProvider();
+                presetContextWindow = preset?.contextWindow;
+            }
+
             const modelConfigWithEndpoint: ModelConfig = selectedModel
                 ? {
                     ...selectedModel,
@@ -692,7 +792,11 @@ export const AIPanel = ({
                     // Pass API key for providers that require it
                     ...(apiKey ? { apiKey } : {}),
                     // Ensure provider is set correctly to prevent routing to wrong backend
-                    provider: activeProvider || selectedModel.provider
+                    provider: activeProvider || selectedModel.provider,
+                    parameters: {
+                        ...selectedModel.parameters,
+                        ...(presetContextWindow ? { contextWindow: presetContextWindow } : {}),
+                    },
                 }
                 : {
                     id: selectedModelId || 'custom',
@@ -704,6 +808,7 @@ export const AIPanel = ({
                         topP: 0.9,
                         maxTokens: 4096,
                         stream: true,
+                        ...(presetContextWindow ? { contextWindow: presetContextWindow } : {}),
                     },
                     isAvailable: true,
                     recommendedFor: [AIMode.Agent],
@@ -720,9 +825,12 @@ export const AIPanel = ({
             console.log('[AIPanel] Final modelConfigWithEndpoint.endpoint:', modelConfigWithEndpoint.endpoint);
 
             // Use the cleaned messages (not the stale 'messages' variable!)
-            const messagesToSend = skillSystemMessage
+            const baseMessages = skillSystemMessage
                 ? [...cleanedMessages, skillSystemMessage, userMessage]
                 : [...cleanedMessages, userMessage];
+            const messagesToSend = featureFlags.memoryRunningSummary
+                ? applySummaryToOutgoing(baseMessages, summaryStateRef.current)
+                : baseMessages;
 
             const skillCatalog = formatSkillCatalog(skillsRef.current);
 
@@ -868,6 +976,43 @@ export const AIPanel = ({
                 selectedModelForPersist?.provider,
                 mode
             );
+
+            // Phase 2: kick off summarization in the background once the
+            // conversation grows past the threshold. Fire-and-forget — the
+            // user keeps chatting; the summary is consumed on the next turn.
+            const fullHistory = [...cleanedMessages, userMessage, finalAssistantMsg];
+            if (featureFlags.memoryRunningSummary) {
+                const budget = computeMemoryBudget(
+                    modelConfigWithEndpoint.parameters.contextWindow,
+                    modelConfigWithEndpoint.parameters.maxTokens,
+                );
+                const decision = shouldSummarize(
+                    fullHistory,
+                    summaryStateRef.current?.summaryThroughTimestamp,
+                    budget.summarizeThreshold,
+                );
+                if (decision.shouldSummarize && !summarizingRef.current) {
+                    void runBackgroundSummarization(
+                        fullHistory,
+                        modelConfigWithEndpoint,
+                        activeConversationIdRef.current,
+                    );
+                }
+            }
+
+            // Phase 3: extract durable facts about the user from this turn and
+            // merge them into the profile. Only run on user-message-bearing
+            // exchanges (skip pure tool-loop turns) and throttle by message count.
+            if (
+                featureFlags.memoryUserProfile &&
+                fullHistory.length >= 4 &&
+                fullHistory.length % 4 === 0
+            ) {
+                void runBackgroundFactExtraction(
+                    fullHistory.slice(-8),
+                    modelConfigWithEndpoint,
+                );
+            }
         } catch (error: any) {
             console.error('Inference failed:', error);
 

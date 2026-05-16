@@ -44,11 +44,103 @@ import { runInference, createMessage } from '@/lib/ai/ai-service';
 import { loadAIConfig } from '@/lib/ai/config';
 import { SkillsPanel } from './SkillsPanel';
 import { SavedProvidersPanel } from './SavedProvidersPanel';
+import { MemorySettingsSection } from './MemorySettingsSection';
+import {
+    FEATURE_FLAG_CHANGE_EVENT,
+    FeatureFlag,
+    featureFlags,
+    isFeatureFlagOverridden,
+} from '@/lib/featureFlags';
+import { computeMemoryBudget, formatTokens } from '@/lib/ai/memory/budget';
 import {
     listSavedProviders,
     getActiveProvider,
     setActiveProviderId,
 } from '@/lib/ai/savedProviders';
+
+const MEMORY_FLAG_PREVIEW: { key: FeatureFlag; label: string }[] = [
+    { key: 'memorySlidingWindow', label: 'Token-budget windowing' },
+    { key: 'memoryRunningSummary', label: 'Running summary' },
+    { key: 'memoryUserProfile', label: 'User profile' },
+    { key: 'memoryCrossConversationSearch', label: 'Cross-conversation search' },
+    { key: 'memoryForgetting', label: 'Forgetting policy' },
+];
+
+interface AdvancedPreviewPaneProps {
+    activeContextWindow?: number;
+    activeMaxTokens?: number;
+    activeModelLabel?: string;
+}
+
+const AdvancedPreviewPane: React.FC<AdvancedPreviewPaneProps> = ({
+    activeContextWindow,
+    activeMaxTokens,
+    activeModelLabel,
+}) => {
+    const [, force] = React.useState(0);
+    React.useEffect(() => {
+        const handler = () => force((n) => n + 1);
+        window.addEventListener(FEATURE_FLAG_CHANGE_EVENT, handler);
+        return () => window.removeEventListener(FEATURE_FLAG_CHANGE_EVENT, handler);
+    }, []);
+    const enabledCount = MEMORY_FLAG_PREVIEW.filter((f) => featureFlags[f.key]).length;
+    const overriddenCount = MEMORY_FLAG_PREVIEW.filter((f) => isFeatureFlagOverridden(f.key)).length;
+    const budget = computeMemoryBudget(activeContextWindow, activeMaxTokens);
+    return (
+        <>
+            <div>
+                <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Memory layers</Label>
+                <Text size={200} block style={{ marginTop: '4px' }}>
+                    {enabledCount} of {MEMORY_FLAG_PREVIEW.length} enabled
+                    {overriddenCount > 0 ? ` (${overriddenCount} overridden)` : ''}
+                </Text>
+            </div>
+            <Divider />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {MEMORY_FLAG_PREVIEW.map((f) => (
+                    <div
+                        key={f.key}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                        }}
+                    >
+                        <Text size={200}>{f.label}</Text>
+                        <Badge
+                            appearance="tint"
+                            size="small"
+                            color={featureFlags[f.key] ? 'success' : 'subtle'}
+                        >
+                            {featureFlags[f.key] ? 'on' : 'off'}
+                        </Badge>
+                    </div>
+                ))}
+            </div>
+            <Divider />
+            <div>
+                <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>
+                    Budget for {activeModelLabel ?? 'active model'}
+                </Label>
+                <Text size={200} block style={{ marginTop: '4px' }}>
+                    Context window: {formatTokens(budget.contextWindow)}
+                    {activeContextWindow === undefined ? ' (default)' : ''}
+                </Text>
+                <Text size={200} block style={{ color: tokens.colorNeutralForeground3 }}>
+                    Summarize at {formatTokens(budget.summarizeThreshold)} · trim to {formatTokens(budget.historyBudget)} · reply reserve {formatTokens(budget.reservedOutputTokens)}
+                </Text>
+            </div>
+            <Divider />
+            <div>
+                <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Storage</Label>
+                <Text size={200} block style={{ marginTop: '4px' }}>
+                    Toggles persist in this browser only. The user profile is stored at <Text size={200} style={{ fontFamily: tokens.fontFamilyMonospace }}>~/.ittoolkit/user_profile.md</Text>; conversation summaries live on each chat&apos;s file.
+                </Text>
+            </div>
+        </>
+    );
+};
 
 const useStyles = makeStyles({
     dialogSurface: {
@@ -811,7 +903,7 @@ export function AISettingsPanel({
                                 )}
 
                                 {selectedTab === 'advanced' && (
-                                    <Text>Advanced settings placehoder...</Text>
+                                    <MemorySettingsSection />
                                 )}
                             </div>
 
@@ -972,14 +1064,19 @@ export function AISettingsPanel({
                                 )}
 
                                 {selectedTab === 'advanced' && (
-                                    <>
-                                        <div>
-                                            <Label size="small" style={{ color: tokens.colorNeutralForeground2 }}>Advanced settings</Label>
-                                            <Text size={200} block style={{ marginTop: '4px' }}>
-                                                Lower-level controls for power users — stop sequences, context window, and provider-specific overrides will appear here.
-                                            </Text>
-                                        </div>
-                                    </>
+                                    <AdvancedPreviewPane
+                                        activeContextWindow={
+                                            (activeProvider === ModelProvider.OpenAICompatible
+                                                ? getActiveProvider()?.contextWindow
+                                                : undefined) ?? modelConfig?.parameters?.contextWindow
+                                        }
+                                        activeMaxTokens={modelConfig?.parameters?.maxTokens}
+                                        activeModelLabel={
+                                            activeProvider === ModelProvider.OpenAICompatible
+                                                ? (customModelName || modelConfig?.name)
+                                                : modelConfig?.name
+                                        }
+                                    />
                                 )}
                             </div>
                         </div>

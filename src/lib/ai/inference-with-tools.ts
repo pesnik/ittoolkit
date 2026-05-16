@@ -71,7 +71,17 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
     content: string;
     isError: boolean;
 }> {
-    const { cmd, working_dir, timeout_secs } = toolCall.arguments as {
+    if (toolCall.name === 'search_conversations') {
+        return executeSearchConversations(toolCall.arguments);
+    }
+    return executeShellCommand(toolCall.arguments);
+}
+
+async function executeShellCommand(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const { cmd, working_dir, timeout_secs } = args as {
         cmd?: string;
         working_dir?: string;
         timeout_secs?: number;
@@ -103,6 +113,43 @@ async function executeTool(toolCall: { name: string; arguments: Record<string, u
     }
 
     return { content, isError };
+}
+
+interface SearchConversationsHit {
+    id: string;
+    title: string;
+    updated: string;
+    snippets: string[];
+}
+
+async function executeSearchConversations(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const query = ((args.query as string) ?? '').trim();
+    const limit = typeof args.limit === 'number' ? args.limit : undefined;
+    if (!query) {
+        return { content: 'search_conversations: missing required argument "query"', isError: true };
+    }
+    try {
+        const hits = await invoke<SearchConversationsHit[]>('search_conversations_content', {
+            query,
+            limit,
+        });
+        if (hits.length === 0) {
+            return { content: `No prior conversations matched "${query}".`, isError: false };
+        }
+        const formatted = hits
+            .map((h) => {
+                const lines = [`### ${h.title} (${h.id.slice(0, 6)}, updated ${h.updated})`];
+                for (const s of h.snippets) lines.push(`- ${s}`);
+                return lines.join('\n');
+            })
+            .join('\n\n');
+        return { content: formatted, isError: false };
+    } catch (e) {
+        return { content: `search_conversations failed: ${e}`, isError: true };
+    }
 }
 
 export async function runInferenceWithTools(

@@ -16,6 +16,7 @@ import {
     AIMode,
     ChatMessage,
     MessageRole,
+    Tool,
 } from '@/types/ai-types';
 // Lazy import for TransformerJS to avoid SSR/build issues
 // Import only when actually needed
@@ -24,9 +25,13 @@ const getTransformerJS = async () => {
 };
 import { buildFileSystemContext } from './context-builder';
 import { getTemplateForMode, buildPrompt } from './prompts';
+import { trimToTokenBudget, DEFAULT_WINDOW_CONFIG } from './memory/windowing';
+import { featureFlags } from '@/lib/featureFlags';
+import { getCachedUserProfile, buildProfileSystemFragment } from './memory/profile-cache';
+import { computeMemoryBudget } from './memory/budget';
 
 // Native function calling tool definition for execute_command
-const EXECUTE_COMMAND_TOOL = {
+const EXECUTE_COMMAND_TOOL: Tool = {
     type: 'function',
     function: {
         name: 'execute_command',
@@ -59,45 +64,73 @@ For directory sizes: du -sh <dir>/*`,
     },
 };
 
-// Known models registry
+// Native function calling tool: search across the user's prior conversations.
+// Use this when the user references something from a previous chat ("the script
+// we wrote last week", "remember when…", "what did we decide about X").
+const SEARCH_CONVERSATIONS_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'search_conversations',
+        description: `Search the user's prior conversations for a keyword or phrase. Use ONLY when the user references past chats and the current conversation does not contain the answer. Returns up to 5 matching conversations with snippets.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Keyword or phrase to search for. Case-insensitive substring match.',
+                },
+                limit: {
+                    type: 'number',
+                    description: 'Max results (default 5, max 20).',
+                },
+            },
+            required: ['query'],
+        },
+    },
+};
+
+// Known models registry. `contextWindow` is the model's stated context window
+// in tokens; the memory module uses it to size the summarization threshold and
+// history trim budget.
 export const KNOWN_MODELS: ModelConfig[] = [
     {
         id: 'llama3.2:1B', name: 'Llama 3.2 1B', provider: ModelProvider.Ollama, isAvailable: false,
-        modelId: 'llama3.2:1B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        modelId: 'llama3.2:1B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 131_072 },
         recommendedFor: [AIMode.Agent], sizeBytes: 1.3e9
     },
     {
         id: 'llama3.2:3B', name: 'Llama 3.2 3B', provider: ModelProvider.Ollama, isAvailable: false,
-        modelId: 'llama3.2:3B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        modelId: 'llama3.2:3B', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 131_072 },
         recommendedFor: [AIMode.Agent], sizeBytes: 2.0e9
     },
     {
         id: 'mistral', name: 'Mistral 7B', provider: ModelProvider.Ollama, isAvailable: false,
-        modelId: 'mistral', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
+        modelId: 'mistral', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true, contextWindow: 32_768 },
         recommendedFor: [AIMode.Agent], sizeBytes: 4.1e9
     },
     {
         id: 'qwen2.5-coder:0.5b', name: 'Qwen 2.5 Coder 0.5B', provider: ModelProvider.Ollama, isAvailable: false,
-        modelId: 'qwen2.5-coder:0.5b', parameters: { temperature: 0.2, topP: 0.7, maxTokens: 4096, stream: true },
+        modelId: 'qwen2.5-coder:0.5b', parameters: { temperature: 0.2, topP: 0.7, maxTokens: 4096, stream: true, contextWindow: 32_768 },
         recommendedFor: [AIMode.Agent], sizeBytes: 0.35e9
     },
     {
         id: 'gemma:2b', name: 'Gemma 2B', provider: ModelProvider.Ollama, isAvailable: false,
-        modelId: 'gemma:2b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        modelId: 'gemma:2b', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 8_192 },
         recommendedFor: [AIMode.Agent], sizeBytes: 1.5e9
     },
     // LlamaCpp (GGUF) - Local inference via bundled llama.cpp
     {
         id: 'llamacpp-coder05b', name: 'Qwen 2.5 Coder 0.5B (Q8_0)', provider: ModelProvider.LlamaCpp, isAvailable: false,
-        modelId: 'qwen2.5-coder-0.5b-q8_0.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        modelId: 'qwen2.5-coder-0.5b-q8_0.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 32_768 },
         recommendedFor: [AIMode.Agent], sizeBytes: 495e6
     },
     {
         id: 'llamacpp-qwen3b', name: 'Qwen 2.5 VL 3B (Q4_K_M)', provider: ModelProvider.LlamaCpp, isAvailable: false,
-        modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true },
+        modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 32_768 },
         recommendedFor: [AIMode.Agent], sizeBytes: 2.0e9
     },
-    // OpenAI-compatible - Generic entries for BYOK providers (OpenRouter, etc.)
+    // OpenAI-compatible - Generic entries for BYOK providers (OpenRouter, etc.).
+    // contextWindow stays unset here so the saved preset's value drives it.
     {
         id: 'openai-compatible-generic', name: 'OpenAI Compatible (Custom)', provider: ModelProvider.OpenAICompatible, isAvailable: true,
         modelId: 'openai-compatible-generic', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 4096, stream: true },
@@ -318,10 +351,17 @@ export async function runInference(
 
     // Add native function calling tool for providers that support it
     // (LlamaCpp + OpenAI-compatible). More reliable than XML tool calling.
-    if ([ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)) {
+    if (
+        !request.suppressTools &&
+        [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)
+    ) {
+        const tools: Tool[] = [EXECUTE_COMMAND_TOOL];
+        if (featureFlags.memoryCrossConversationSearch) {
+            tools.push(SEARCH_CONVERSATIONS_TOOL);
+        }
         requestWithSystem = {
             ...requestWithSystem,
-            tools: [EXECUTE_COMMAND_TOOL],
+            tools,
         };
     }
 
@@ -367,6 +407,19 @@ export async function runInference(
  * Prepare messages with system prompt
  */
 function prepareMessages(request: InferenceRequest): ChatMessage[] {
+    const budget = computeMemoryBudget(
+        request.modelConfig.parameters.contextWindow,
+        request.modelConfig.parameters.maxTokens,
+    );
+    const windowBudget = budget.historyBudget || DEFAULT_WINDOW_CONFIG.budgetTokens;
+
+    if (request.skipSystemPrompt) {
+        if (featureFlags.memorySlidingWindow) {
+            const trimmed = trimToTokenBudget(request.messages, windowBudget);
+            return trimmed.messages;
+        }
+        return request.messages;
+    }
     try {
         const template = getTemplateForMode(request.mode);
 
@@ -399,14 +452,33 @@ IMPORTANT USAGE RULES:
 - The command runs in the specified working directory.
 - Default timeout is 30 seconds. Use timeout_secs for long-running operations.
 - Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.
-- File-reading commands (cat/less/more/head/tail/bat/od/xxd/strings) and write/move commands (rm/mv/cp/dd, shell redirects) prompt the user for explicit approval before executing.`;
+- File-reading commands (cat/less/more/head/tail/bat/od/xxd/strings) and write/move commands (rm/mv/cp/dd, shell redirects) prompt the user for explicit approval before executing.
 
-    const systemPrompt = buildPrompt(template.systemPrompt, {
+${featureFlags.memoryCrossConversationSearch ? `## search_conversations Tool
+
+Search the user's prior conversations for a keyword. Use ONLY when the user references past chats and the current context doesn't contain the answer.
+
+Tool: search_conversations
+Arguments:
+  - query (string, required): Substring to search for (case-insensitive).
+  - limit (number, optional): Max results, default 5, max 20.
+
+Returns: Array of {id, title, updated, snippets[]} for matching conversations.
+
+Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}`;
+
+    let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,
         current_path: request.fsContext?.currentPath || '/',
         mcp_tools: executeCommandDesc,
         available_skills: request.skillCatalog || '(no skills installed)',
     });
+
+    if (featureFlags.memoryUserProfile) {
+        const profile = getCachedUserProfile();
+        const fragment = buildProfileSystemFragment(profile);
+        if (fragment) systemPrompt = `${systemPrompt}\n\n${fragment}`;
+    }
 
     console.log('[ai-service] System prompt built:');
     console.log('[ai-service]   Mode:', request.mode);
@@ -428,14 +500,24 @@ IMPORTANT USAGE RULES:
 
         // If system message exists, replace it with the new one
         // CAUSE: Previous logic returned early if system message existed, preserving old context
+        let withSystem: ChatMessage[];
         if (systemMessageIndex !== -1) {
-            const newMessages = [...request.messages];
-            newMessages[systemMessageIndex] = systemMessage;
-            return newMessages;
+            withSystem = [...request.messages];
+            withSystem[systemMessageIndex] = systemMessage;
+        } else {
+            withSystem = [systemMessage, ...request.messages];
         }
 
-        // Add system message at the beginning if not present
-        return [systemMessage, ...request.messages];
+        if (featureFlags.memorySlidingWindow) {
+            const trimmed = trimToTokenBudget(withSystem, windowBudget);
+            if (trimmed.droppedCount > 0) {
+                console.log(
+                    `[ai-service] Memory window dropped ${trimmed.droppedCount} message(s) — ${trimmed.tokensBefore} → ${trimmed.tokensAfter} est. tokens (budget ${windowBudget}, ctx ${budget.contextWindow})`,
+                );
+            }
+            return trimmed.messages;
+        }
+        return withSystem;
     } catch (error) {
         console.error('[ai-service] Error in prepareMessages:', error);
         console.error('[ai-service] Request:', request);

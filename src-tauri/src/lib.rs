@@ -10,6 +10,7 @@ mod partition_commands;
 mod conversations;
 mod skills;
 mod user_info;
+mod user_profile;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -83,6 +84,12 @@ pub fn run() {
         conversations::append_message,
         conversations::update_conversation_title,
         conversations::delete_conversation,
+        conversations::update_conversation_summary,
+        conversations::search_conversations_content,
+        // User profile (durable cross-conversation memory)
+        user_profile::load_user_profile,
+        user_profile::save_user_profile,
+        user_profile::merge_user_profile_facts,
         // Skills
         skills::list_skills,
         skills::get_skill_source,
