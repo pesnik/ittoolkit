@@ -4,12 +4,21 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { log } from './log.js';
+import type { AxNode } from './snapshot.js';
+
+export interface SessionObservation {
+    ax: AxNode[];
+    capturedAt: number;
+}
 
 export interface SessionRef {
     sessionId: string;
     browser: Browser;
     context: BrowserContext;
     page: Page;
+    /** Last AX snapshot. browser_act resolves params.index against this; if
+     *  stale (>30s) or absent, the act handler re-snapshots. */
+    lastObservation: SessionObservation | null;
 }
 
 const sessions = new Map<string, SessionRef>();
@@ -44,7 +53,9 @@ export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
         // distinct Browser handle. Synthesize a close() shim so the rest of
         // the code can uniformly call browser.close().
         const browser = { close: () => context.close() } as unknown as Browser;
-        const ref: SessionRef = { sessionId: opts.sessionId, browser, context, page };
+        const ref: SessionRef = {
+            sessionId: opts.sessionId, browser, context, page, lastObservation: null,
+        };
         sessions.set(opts.sessionId, ref);
         log.info('session opened (persistent)', { sessionId: opts.sessionId });
         return ref;
@@ -53,7 +64,9 @@ export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
-    const ref: SessionRef = { sessionId: opts.sessionId, browser, context, page };
+    const ref: SessionRef = {
+        sessionId: opts.sessionId, browser, context, page, lastObservation: null,
+    };
     sessions.set(opts.sessionId, ref);
     log.info('session opened (ephemeral)', { sessionId: opts.sessionId });
     return ref;

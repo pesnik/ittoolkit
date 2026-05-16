@@ -234,10 +234,50 @@ const BROWSER_CLOSE_TOOL: Tool = {
     },
 };
 
+const BROWSER_ACT_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'browser_act',
+        description: `Interact with an element from the most recent browser_observe. \`index\` references an entry in the ax array. The app classifies each call:
+  - hover, scroll, plain typing into non-password fields, single clicks on non-form-submit elements → autonomous.
+  - typing into password/credit-card inputs, clicking buttons inside a sensitive form, or setting submit=true → write (user approval prompt).
+  - mailto:/tel:/file:/javascript: navigations are destructive (always approval).
+
+The app shows the user a screenshot + intent before any write/destructive action and routes their Approve/Dismiss decision back. Cancelled actions return "Cancelled by user" — do not retry without addressing the user's reason.
+
+For password fields, call browser_observe first so the app can detect password tags and route through approval correctly.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                session_id: { type: 'string' },
+                action: {
+                    type: 'string',
+                    enum: ['click', 'type', 'select', 'scroll', 'press', 'hover'],
+                    description: 'Interaction kind. scroll/press do not need an index. type/select use the text field for the value to type or option to select. press uses text as the key name (e.g. "Enter").',
+                },
+                index: {
+                    type: 'number',
+                    description: 'Index into the latest browser_observe ax[] array. Required for click/type/select/hover.',
+                },
+                text: {
+                    type: 'string',
+                    description: 'For type: text to type. For select: option value. For press: key name (e.g. "Enter", "Tab", "Escape"). For scroll: "up" | "down" | "top" | "bottom".',
+                },
+                submit: {
+                    type: 'boolean',
+                    description: 'When true, presses Enter after typing — used for "type and submit" patterns. Always classified as write.',
+                },
+            },
+            required: ['session_id', 'action'],
+        },
+    },
+};
+
 const BROWSER_TOOLS: Tool[] = [
     BROWSER_OPEN_TOOL,
     BROWSER_NAVIGATE_TOOL,
     BROWSER_OBSERVE_TOOL,
+    BROWSER_ACT_TOOL,
     BROWSER_CLOSE_TOOL,
 ];
 
@@ -723,9 +763,16 @@ Returns: Array of {id, title, updated, snippets[]} for matching conversations.
 
 Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}
 
-${canUseBrowserTools(request.modelConfig) ? `## Browser tools (read-only, M1)
+${canUseBrowserTools(request.modelConfig) ? `## Browser tools
 
-The agent can drive a real Chromium browser via four tools. Use them for web-based IT tasks (admin consoles, status pages, knowledge base lookups). All four are autonomous in M1 — no user confirmation needed. (Write actions like clicking and typing arrive in M2 and will prompt for approval.)
+The agent can drive a real Chromium browser via five tools. Use them for web-based IT tasks (admin consoles, status pages, knowledge base lookups).
+
+Risk tiers (mirror the shell classifier):
+- READ — autonomous: open, close, observe, http(s) navigation, hover/scroll, plain typing into non-password fields, single clicks on non-form-submit elements.
+- WRITE — user-approval required: typing into a password/credit-card field, clicking a button inside a form that contains password/credit-card inputs, anything with submit=true.
+- DESTRUCTIVE — user-approval required, hard-default risky: mailto:/tel:/file:/javascript: navigation.
+
+You will receive "Cancelled by user" if the user denies an action. Do not retry the same action — ask the user what to do instead.
 
 ### browser_open
 Opens a session (or attaches to an existing one). Always call this first.
@@ -733,13 +780,17 @@ Arguments: session_id (string, required), profile ("ephemeral" | "persistent", o
 Returns: { session_id }.
 
 ### browser_navigate
-Loads a URL in the session. Use absolute http(s):// URLs only.
+Loads a URL in the session. Use absolute http(s):// URLs.
 Arguments: session_id (required), url (required), wait_until ("load" | "domcontentloaded" | "networkidle", optional).
 Returns: { url, title }.
 
 ### browser_observe
-Captures page state as { url, title, ax, screenshot }. The ax field is a flat indexed list of interactive elements: [{ index, role, name, value?, description?, leaf, children? }]. Each call replaces the prior screenshot in your view — you'll be shown the latest one. Use after every navigation and after any action that changes the page.
+Captures page state as { url, title, ax, screenshot }. The ax field is a flat indexed list of interactive elements: [{ index, role, name, value?, leaf, tags? }]. tags may include "password" (typing here is write) and "form_submit" (clicking here is write).
 Arguments: session_id (required), include_screenshot (boolean, default true), max_elements (number, default 80, max 200).
+
+### browser_act
+Interact with an element from the latest browser_observe (referenced by index).
+Arguments: session_id (required), action ("click" | "type" | "select" | "scroll" | "press" | "hover", required), index (for click/type/select/hover), text (for type/select/press/scroll), submit (boolean, defaults false).
 
 ### browser_close
 Releases the Chromium resources. Always call this when finished with a session.
@@ -748,9 +799,10 @@ Arguments: session_id (required).
 USAGE PATTERN:
   1. browser_open {"session_id":"main"}
   2. browser_navigate {"session_id":"main","url":"https://…"}
-  3. browser_observe {"session_id":"main"}    // see the page
-  4. … reason about the screenshot + ax tree, decide next step
-  5. browser_close {"session_id":"main"}      // when done` : ''}`;
+  3. browser_observe {"session_id":"main"}    // see the page; note element indices and tags
+  4. browser_act {"session_id":"main","action":"type","index":7,"text":"…"}
+  5. browser_observe {"session_id":"main"}    // confirm the change
+  6. browser_close {"session_id":"main"}      // when done` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

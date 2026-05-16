@@ -1,6 +1,16 @@
 // AX-tree → flat indexed element list. The model receives this as the
 // perception primitive; element indices it returns in browser_act are
 // resolved back to coordinates / locators here.
+//
+// Each node may carry `tags` computed from the live DOM (page.evaluate):
+//   - "password": text input is a password/credit-card field. Typing into
+//     it is classified `write` (requires approval).
+//   - "form_submit": button/link whose enclosing <form> contains a
+//     password/email/credit-card input. Clicking it is classified `write`
+//     (submits credentials).
+// browser_classify reads these tags to decide whether browser_act needs
+// user approval. Tags are best-effort — pages without semantic <form>
+// markup may slip through; the model should err on the side of caution.
 
 import type { Page } from 'playwright-core';
 import { log } from './log.js';
@@ -17,6 +27,8 @@ export interface AxNode {
     leaf: boolean;
     /** Children indices, if any. Flattened so the model can scan linearly. */
     children?: number[];
+    /** Risk tags computed from the live DOM (see module docstring). */
+    tags?: string[];
 }
 
 const INTERACTIVE_ROLES = new Set([
@@ -66,6 +78,15 @@ interface RawAx {
 
 interface FlattenOptions {
     maxElements: number;
+    tagMap?: TagMap;
+}
+
+/** Map keyed by lowercased "role::name" → tag list. Built once per observe
+ *  call from a single page.evaluate; matched onto AX nodes during flatten. */
+type TagMap = Map<string, string[]>;
+
+function tagKey(role: string, name: string): string {
+    return `${role.toLowerCase()}::${name.trim().toLowerCase()}`;
 }
 
 function shouldKeep(node: RawAx): boolean {
@@ -90,6 +111,7 @@ function clamp(s: string | undefined, n: number): string | undefined {
 function flatten(root: RawAx, opts: FlattenOptions): AxNode[] {
     const out: AxNode[] = [];
     const queue: Array<{ node: RawAx; parentIndex: number | null }> = [{ node: root, parentIndex: null }];
+    const tagMap = opts.tagMap;
 
     while (queue.length > 0 && out.length < opts.maxElements) {
         const { node, parentIndex } = queue.shift()!;
@@ -97,6 +119,7 @@ function flatten(root: RawAx, opts: FlattenOptions): AxNode[] {
 
         if (shouldKeep(node)) {
             const idx = out.length;
+            const tags = tagMap?.get(tagKey(node.role!, node.name ?? '')) ?? undefined;
             const flat: AxNode = {
                 index: idx,
                 role: node.role!,
@@ -104,6 +127,7 @@ function flatten(root: RawAx, opts: FlattenOptions): AxNode[] {
                 value: clamp(node.value, 200),
                 description: clamp(node.description, 200),
                 leaf: children.length === 0,
+                ...(tags && tags.length ? { tags } : {}),
             };
             out.push(flat);
             if (parentIndex !== null) {
@@ -122,11 +146,100 @@ function flatten(root: RawAx, opts: FlattenOptions): AxNode[] {
     return out;
 }
 
+/**
+ * Compute risk tags for accessible elements via a single page.evaluate.
+ * Returns a map keyed by lowercased "role::name" → tag list. Matched onto
+ * AX nodes during flatten.
+ *
+ * Algorithm:
+ *   1. Find all <form> elements containing password/email/credit-card inputs
+ *      → these forms are "sensitive".
+ *   2. Buttons/links inside a sensitive form → tag "form_submit".
+ *   3. Any input[type=password] → tag "password".
+ *
+ * Best-effort: pages without semantic <form> markup (React modals, custom
+ * components) may slip through. browser_classify defaults closed on unknown
+ * methods, so the model is steered toward calling browser_observe again
+ * after navigation rather than blindly clicking.
+ */
+async function buildTagMap(page: Page): Promise<TagMap> {
+    try {
+        const entries = await page.evaluate(() => {
+            const out: Array<[string, string]> = [];
+            const sensitiveSelector = [
+                'input[type="password"]',
+                'input[type="email"]',
+                'input[autocomplete*="password"]',
+                'input[autocomplete*="credit-card"]',
+                'input[autocomplete*="cc-"]',
+            ].join(',');
+            const sensitiveForms = new Set<Element>();
+            for (const inp of Array.from(document.querySelectorAll(sensitiveSelector))) {
+                const form = inp.closest('form');
+                if (form) sensitiveForms.add(form);
+            }
+
+            const nameOf = (el: Element): string => {
+                const aria = el.getAttribute('aria-label');
+                if (aria) return aria.trim();
+                const labelledby = el.getAttribute('aria-labelledby');
+                if (labelledby) {
+                    const node = document.getElementById(labelledby);
+                    if (node?.textContent) return node.textContent.trim();
+                }
+                const text = (el as HTMLElement).innerText || el.textContent || '';
+                return text.trim();
+            };
+            const roleOf = (el: Element): string => {
+                const explicit = el.getAttribute('role');
+                if (explicit) return explicit.toLowerCase();
+                const tag = el.tagName.toLowerCase();
+                if (tag === 'button' || (tag === 'input' && (el as HTMLInputElement).type === 'submit')) return 'button';
+                if (tag === 'a' && (el as HTMLAnchorElement).hasAttribute('href')) return 'link';
+                if (tag === 'input') return 'textbox';
+                return tag;
+            };
+
+            // form_submit: anything clickable inside a sensitive form
+            for (const el of Array.from(document.querySelectorAll('button, [role="button"], a[href], input[type="submit"]'))) {
+                const form = el.closest('form');
+                if (form && sensitiveForms.has(form)) {
+                    out.push([`${roleOf(el)}::${nameOf(el).toLowerCase()}`, 'form_submit']);
+                }
+            }
+            // password: any password input
+            for (const inp of Array.from(document.querySelectorAll('input[type="password"]'))) {
+                out.push([`textbox::${nameOf(inp).toLowerCase()}`, 'password']);
+                const ph = (inp as HTMLInputElement).placeholder;
+                if (ph) out.push([`textbox::${ph.trim().toLowerCase()}`, 'password']);
+            }
+            return out;
+        });
+
+        const map: TagMap = new Map();
+        for (const [key, tag] of entries) {
+            const existing = map.get(key);
+            if (existing) {
+                if (!existing.includes(tag)) existing.push(tag);
+            } else {
+                map.set(key, [tag]);
+            }
+        }
+        return map;
+    } catch (e) {
+        log.warn('buildTagMap failed; classification falls back to defaults', { err: String(e) });
+        return new Map();
+    }
+}
+
 export async function captureAxTree(page: Page, maxElements: number): Promise<AxNode[]> {
     try {
-        const snapshot = await page.accessibility.snapshot({ interestingOnly: false });
+        const [snapshot, tagMap] = await Promise.all([
+            page.accessibility.snapshot({ interestingOnly: false }),
+            buildTagMap(page),
+        ]);
         if (!snapshot) return [];
-        return flatten(snapshot as RawAx, { maxElements });
+        return flatten(snapshot as RawAx, { maxElements, tagMap });
     } catch (e) {
         log.warn('captureAxTree failed', { err: String(e) });
         return [];

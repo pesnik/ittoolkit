@@ -4,6 +4,7 @@ import { runInference } from './ai-service';
 import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags } from './tool-calling';
 import { runtimeSettings } from '@/lib/runtimeSettings';
 import { classifyShellCommand } from './shell-classify';
+import { classifyBrowserAction, describeBrowserAction, type BrowserRisk } from './browser-classify';
 
 export interface ToolExecutionEvent {
     /** Unique per call within a turn. The model can invoke the same tool
@@ -21,7 +22,18 @@ export interface ToolExecutionEvent {
     actions?: ToolResultAction[];
 }
 
-export type ConfirmKind = 'write' | 'read';
+export type ConfirmKind = 'write' | 'read' | 'destructive';
+
+/** Extra context shown to the user on the approval card. Optional — shell
+ *  commands have it derived from `args.cmd`; browser actions populate
+ *  `intent` (a one-line description) and `screenshotBase64` so the user
+ *  sees what they're approving. */
+export interface ConfirmMeta {
+    intent?: string;
+    screenshotBase64?: string;
+    /** Tool family — "shell" or "browser". UIs can render different layouts. */
+    surface?: 'shell' | 'browser';
+}
 
 export interface InferenceWithToolsOptions {
     onChunk?: (chunk: string) => void;
@@ -30,7 +42,8 @@ export interface InferenceWithToolsOptions {
     onConfirmExecution?: (
         toolName: string,
         args: Record<string, unknown>,
-        kind: ConfirmKind
+        kind: ConfirmKind,
+        meta?: ConfirmMeta,
     ) => Promise<boolean>;
     isCancelled?: () => boolean;
 }
@@ -197,8 +210,43 @@ const BROWSER_METHOD_MAP: Record<string, string> = {
     browser_open: 'browser.open',
     browser_navigate: 'browser.navigate',
     browser_observe: 'browser.observe',
+    browser_act: 'browser.act',
     browser_close: 'browser.close',
 };
+
+/** Per-session cache of the latest browser_observe AX tree. browser_act uses
+ *  it to hydrate `tags` on the params we send the sidecar (so the
+ *  authoritative Rust classifier sees the same risk picture the frontend
+ *  did). Survives across tool calls within a session. */
+const LATEST_OBSERVATIONS = new Map<string, {
+    ax: Array<{ index: number; role: string; name: string; tags?: string[] }>;
+    url?: string;
+    title?: string;
+    screenshot?: string;
+    capturedAt: number;
+}>();
+
+/** Look up the AX node referenced by `params.index` in the cached observation
+ *  for this session and merge its `tags` + `role` into the params. After this
+ *  runs, both the frontend classifier and the Rust classifier (which reads
+ *  params.tags directly) see the same risk picture for the action. */
+function hydrateBrowserActParams(params: Record<string, unknown>): void {
+    const sessionId = (params.session_id as string | undefined) ?? '';
+    const cached = LATEST_OBSERVATIONS.get(sessionId);
+    if (!cached) return;
+    const index = typeof params.index === 'number' ? params.index : -1;
+    if (index < 0 || index >= cached.ax.length) return;
+    const node = cached.ax[index];
+    if (node.tags && node.tags.length && params.tags === undefined) {
+        params.tags = [...node.tags];
+    }
+    if (node.role && params.role === undefined) {
+        params.role = node.role;
+    }
+    if (node.name && params.name === undefined) {
+        params.name = node.name;
+    }
+}
 
 interface BrowserObserveResult {
     url?: string;
@@ -212,7 +260,9 @@ async function logBrowserAudit(event: {
     method: string;
     sessionId: string;
     url?: string;
-    outcome: 'ok' | 'error';
+    elementRole?: string;
+    elementName?: string;
+    outcome: 'ok' | 'error' | 'denied';
 }): Promise<void> {
     try {
         await invoke('log_browser_action_event', {
@@ -222,8 +272,8 @@ async function logBrowserAudit(event: {
                 sessionId: event.sessionId,
                 skillId: null,
                 url: event.url ?? null,
-                elementRole: null,
-                elementName: null,
+                elementRole: event.elementRole ?? null,
+                elementName: event.elementName ?? null,
                 screenshotSha256: null,
                 approver: null,
                 outcome: event.outcome,
@@ -259,6 +309,16 @@ async function executeBrowserTool(
         if (toolName === 'browser_observe') {
             const obs = (result ?? {}) as BrowserObserveResult;
             const ax = obs.ax ?? [];
+            // Cache so browser_act can hydrate `tags` + `role` on the params
+            // we send the sidecar, keeping the Rust classifier in sync with
+            // the frontend classifier's risk picture.
+            LATEST_OBSERVATIONS.set(sessionId, {
+                ax: (ax as Array<{ index: number; role: string; name: string; tags?: string[] }>),
+                url: obs.url,
+                title: obs.title,
+                screenshot: obs.screenshot,
+                capturedAt: Date.now(),
+            });
             // The text portion of the tool result. The screenshot rides
             // alongside as a separate image content block — see `images`.
             const lines: string[] = [];
@@ -301,20 +361,48 @@ async function executeBrowserTool(
             };
         }
 
-        const summary =
-            toolName === 'browser_navigate'
-                ? `Navigated to ${(result as any)?.url ?? args.url} — ${(result as any)?.title ?? ''}`
-                : toolName === 'browser_open'
-                  ? `Opened browser session "${(result as any)?.session_id ?? sessionId}".`
-                  : toolName === 'browser_close'
-                    ? `Closed browser session "${sessionId}".`
-                    : JSON.stringify(result);
+        // Per-tool result shaping + audit classification.
+        let summary: string;
+        let classification: string = 'read';
+        let elementRole: string | undefined;
+        let elementName: string | undefined;
+
+        if (toolName === 'browser_navigate') {
+            const r = result as any;
+            summary = `Navigated to ${r?.url ?? args.url} — ${r?.title ?? ''}`;
+            // URL scheme determines classification — already gated upstream
+            // but we record it accurately here.
+            const url = String(args.url ?? '');
+            classification = /^(mailto:|tel:|file:|javascript:)/i.test(url) ? 'destructive' : 'read';
+        } else if (toolName === 'browser_act') {
+            const r = result as any;
+            const action = String(args.action ?? '');
+            const tags = (args.tags as string[] | undefined) ?? r?.target_tags ?? [];
+            const isWrite = args.submit === true
+                || (action === 'type' && tags.includes('password'))
+                || (action === 'click' && tags.includes('form_submit'))
+                || (action === 'press' && tags.includes('password'));
+            classification = isWrite ? 'write' : 'read';
+            elementRole = (r?.target_role ?? args.role) as string | undefined;
+            elementName = (r?.target_name ?? args.name) as string | undefined;
+            summary = `Performed ${action}` +
+                (elementName ? ` on ${elementRole ?? ''} "${elementName}"` : '') +
+                ` (now at ${r?.url ?? '(unknown url)'}).`;
+        } else if (toolName === 'browser_open') {
+            summary = `Opened browser session "${(result as any)?.session_id ?? sessionId}".`;
+        } else if (toolName === 'browser_close') {
+            summary = `Closed browser session "${sessionId}".`;
+        } else {
+            summary = JSON.stringify(result);
+        }
 
         await logBrowserAudit({
-            classification: 'read',
+            classification,
             method,
             sessionId,
             url: (result as any)?.url,
+            elementRole,
+            elementName,
             outcome: 'ok',
         });
 
@@ -698,12 +786,53 @@ export async function runInferenceWithTools(
                     });
                 }
 
-                const cmd = (toolCall.arguments?.cmd as string) || '';
-                const confirmKind = toolCall.name === 'execute_command' ? classifyCommand(cmd) : null;
+                // Hydrate browser_act params with tags/role from the latest
+                // cached browser_observe, so classification sees the same
+                // risk picture the Rust side will. Mutates `arguments` in
+                // place — the sidecar receives the enriched payload too.
+                if (toolCall.name === 'browser_act') {
+                    hydrateBrowserActParams(toolCall.arguments);
+                }
+
+                let confirmKind: ConfirmKind | null = null;
+                let confirmMeta: ConfirmMeta | undefined;
+                if (toolCall.name === 'execute_command') {
+                    const cmd = (toolCall.arguments?.cmd as string) || '';
+                    confirmKind = classifyCommand(cmd);
+                    confirmMeta = { surface: 'shell' };
+                } else if (toolCall.name.startsWith('browser_')) {
+                    const risk = classifyBrowserAction({
+                        method: toolCall.name,
+                        params: toolCall.arguments,
+                        hints: {
+                            tags: toolCall.arguments?.tags as string[] | undefined,
+                            role: toolCall.arguments?.role as string | undefined,
+                        },
+                    });
+                    if (risk === 'write' || risk === 'destructive') {
+                        confirmKind = risk;
+                        const sessionId = (toolCall.arguments?.session_id as string | undefined) ?? '';
+                        const cached = LATEST_OBSERVATIONS.get(sessionId);
+                        const intent = describeBrowserAction(
+                            { method: toolCall.name, params: toolCall.arguments },
+                            cached?.url,
+                        );
+                        confirmMeta = {
+                            surface: 'browser',
+                            intent,
+                            screenshotBase64: cached?.screenshot,
+                        };
+                    }
+                }
                 const needsConfirm = !!(onConfirmExecution && confirmKind);
 
                 if (needsConfirm && confirmKind) {
-                    const confirmed = await onConfirmExecution!(toolCall.name, toolCall.arguments, confirmKind);
+                    const confirmed = await onConfirmExecution!(
+                        toolCall.name,
+                        toolCall.arguments,
+                        confirmKind,
+                        confirmMeta,
+                    );
                     if (isCancelled?.()) {
                         throw new Error('Inference cancelled');
                     }

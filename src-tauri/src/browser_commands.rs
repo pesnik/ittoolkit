@@ -245,6 +245,19 @@ pub async fn browser_rpc(
     request: BrowserRpcRequest,
     state: State<'_, BrowserSupervisor>,
 ) -> Result<Value, String> {
+    // Authoritative classification for audit + future approval-token gating.
+    // The frontend already gates write/destructive actions via the
+    // onConfirmExecution prompt before calling us; this is defense-in-depth.
+    // TODO (M2.x): reject write/destructive without an approval token from
+    // the user-confirmation flow. For now we log + forward — the front-end
+    // approval flow is the single source of truth.
+    let risk = crate::browser_classify::classify(&request.method, &request.params);
+    log::debug!(
+        "browser_rpc method={} classified={}",
+        request.method,
+        risk.as_str()
+    );
+
     let inner = Arc::clone(&state.inner);
     ensure_spawned(Arc::clone(&inner), &app).await?;
     send_rpc(inner, request.method, request.params).await

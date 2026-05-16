@@ -30,6 +30,8 @@ export async function handleObserve(params: ObserveParams): Promise<{
         ref.page.title().catch(() => ''),
     ]);
 
+    ref.lastObservation = { ax, capturedAt: Date.now() };
+
     return {
         url: ref.page.url(),
         title,

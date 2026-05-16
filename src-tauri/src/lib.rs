@@ -13,6 +13,7 @@ mod skills;
 mod user_info;
 mod user_profile;
 mod audit_log;
+mod browser_classify;
 mod browser_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

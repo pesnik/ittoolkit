@@ -8,6 +8,7 @@ import { handleOpen } from './handlers/open.js';
 import { handleNavigate } from './handlers/navigate.js';
 import { handleObserve } from './handlers/observe.js';
 import { handleClose } from './handlers/close.js';
+import { handleAct } from './handlers/act.js';
 import { closeAllSessions } from './sessions.js';
 import { log } from './log.js';
 
@@ -32,6 +33,7 @@ const HANDLERS: Record<string, (params: any) => Promise<unknown>> = {
     'browser.open': handleOpen,
     'browser.navigate': handleNavigate,
     'browser.observe': handleObserve,
+    'browser.act': handleAct,
     'browser.close': handleClose,
 };
 
