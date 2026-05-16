@@ -302,53 +302,45 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
             .join('\n');
     };
 
-    /** Extract file/folder paths from tool result/error text for rendering as
-     *  clickable chips. We look for common patterns like:
-     *    ~/path, /absolute/path, C:\path
-     *  and handle tab-separated output (e.g. du -sh: "100M\t/path/with spaces").
-     *  Results are deduplicated. */
-    function extractPaths(text: string | undefined): string[] {
+    /** Extract file/folder paths from tab-separated tool output (du -sh,
+     *  ls -la, find -printf "%s\\t%p", etc.). Only handles the tab-separated
+     *  form so paths with spaces work correctly — flowing-text regex
+     *  extraction was too easy to confuse on macOS volumes like
+     *  "/Volumes/Time Machine Backups/…". For all other commands we'd rather
+     *  show zero chips than the wrong ones; the agent should emit a
+     *  structured agent_action instead. */
+    function extractPathsFromTabSeparated(text: string | undefined): string[] {
         if (!text) return [];
         const seen = new Set<string>();
         const paths: string[] = [];
-
-        const lines = text.split('\n');
-        for (const line of lines) {
-            // Tab-separated: content after last tab is the path (handles du -sh,
-            // ls -la, and similar tool output where the path may contain spaces).
+        for (const line of text.split('\n')) {
             const tabIdx = line.lastIndexOf('\t');
-            if (tabIdx >= 0) {
-                const candidate = line.slice(tabIdx + 1).trim();
-                if (candidate.startsWith('/') && candidate.length > 2 && !seen.has(candidate)) {
-                    seen.add(candidate);
-                    paths.push(candidate);
-                    continue;
-                }
-                if (candidate.startsWith('~') && candidate.length > 2 && !seen.has(candidate)) {
-                    seen.add(candidate);
-                    paths.push(candidate);
-                    continue;
-                }
-            }
-
-            // Plain regex fallback for paths in flowing text.
-            const matches = line.matchAll(/(?:^|\s)(\/(?:[^\s,;)\]]+(?:\/[^\s,;)\]]*)*))/g);
-            for (const m of matches) {
-                const p = m[1].trim();
-                if (p.length > 2 && !seen.has(p)) {
-                    seen.add(p);
-                    paths.push(p);
-                }
-            }
+            if (tabIdx < 0) continue;
+            const candidate = line.slice(tabIdx + 1).trim();
+            if (candidate.length <= 2) continue;
+            if (!candidate.startsWith('/') && !candidate.startsWith('~')) continue;
+            if (seen.has(candidate)) continue;
+            seen.add(candidate);
+            paths.push(candidate);
         }
         return paths.slice(0, 8);
     }
 
-    // Combine paths from structured actions + text extraction
+    /** Whether this tool call's output is shaped like `du`/`ls` — i.e. tab-
+     *  separated rows where the trailing field is a path. We only bother
+     *  with text extraction for these commands; everything else relies on
+     *  structured agent_action emits. */
+    function isTabSeparatedPathCommand(execution: ToolExecutionData): boolean {
+        if (execution.toolName !== 'execute_command') return false;
+        const cmd = (execution.arguments?.cmd as string | undefined)?.trim() ?? '';
+        return /^(du|ls|find|stat|wc)\b/.test(cmd);
+    }
+
+    // Combine paths from structured actions + (narrow) text extraction.
     const pathChips = (() => {
         const chips: { path: string; label?: string }[] = [];
         const seen = new Set<string>();
-        // 1) Structured actions
+        // 1) Structured actions — always preferred when present.
         for (const action of execution.actions ?? []) {
             if (
                 (action.type === 'navigate' || action.type === 'open_file') &&
@@ -363,13 +355,13 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
                 });
             }
         }
-        // 2) Text-extracted paths (only if no structured actions).
+        // 2) Tab-separated fallback for du/ls/find/stat/wc only.
         //    Check both result and error — some backends put stdout in error
         //    when the tool reports a non-zero exit code.
-        if (chips.length === 0) {
+        if (chips.length === 0 && isTabSeparatedPathCommand(execution)) {
             const candidates = [
-                ...extractPaths(execution.result),
-                ...extractPaths(execution.error),
+                ...extractPathsFromTabSeparated(execution.result),
+                ...extractPathsFromTabSeparated(execution.error),
             ];
             for (const p of candidates) {
                 if (!seen.has(p)) {
