@@ -20,7 +20,7 @@ import {
     DialogActions,
 } from '@fluentui/react-components';
 import {
-    Add20Regular,
+    Add12Regular,
     Delete16Regular,
     Checkmark16Regular,
     Edit16Regular,
@@ -527,8 +527,9 @@ export function SavedProvidersPanel({ onChange, onEditingStateChange }: SavedPro
                 </div>
                 <Button
                     appearance="primary"
-                    icon={<Add20Regular />}
+                    icon={<Add12Regular />}
                     onClick={startNew}
+                    style={{ whiteSpace: 'nowrap' }}
                 >
                     New preset
                 </Button>
