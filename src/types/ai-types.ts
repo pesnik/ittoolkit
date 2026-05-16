@@ -101,6 +101,23 @@ export type ToolResultAction =
         suggestedCommand: string;
         /** Absolute working directory for the suggested command. */
         suggestedWorkingDir: string;
+    } }
+  | { type: 'computer_preview'; payload: {
+        /** Tool name: computer_screenshot / computer_screen_size / computer_cursor_position / etc. */
+        kind: string;
+        /** Base64 JPEG. Present on computer_screenshot in-flight; not persisted. */
+        screenshot?: string;
+        width?: number;
+        height?: number;
+        displayIndex?: number;
+        x?: number;
+        y?: number;
+        displays?: Array<{
+            index: number; x: number; y: number;
+            width: number; height: number;
+            scaleFactor: number; isPrimary: boolean; name: string;
+        }>;
+        [extra: string]: unknown;
     } };
 
 /**

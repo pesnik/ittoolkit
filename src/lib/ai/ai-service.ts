@@ -131,6 +131,86 @@ Constraints (enforced at dispatch):
     },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Computer-use tools (CU-M2 — read-only set: screenshot, screen_size,
+// cursor_position). Write tools (mouse_move, click, type, key, scroll) land
+// in CU-M3 with the classifier + approval flow. computer_find (OmniParser →
+// UI-TARS grounding) lands in CU-M4.
+//
+// These are only registered when:
+//   1. featureFlags.computerUseAgent is enabled, AND
+//   2. The active model claims vision support (computer_screenshot is the
+//      whole point — without vision the model is blind).
+//
+// All three are autonomous; computer_screenshot is the heaviest in token
+// terms (~30–80 KB base64). The screenshot-retention layer caps how many
+// stay in context.
+// ─────────────────────────────────────────────────────────────────────────
+
+const COMPUTER_SCREENSHOT_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_screenshot',
+        description: `Capture a screenshot of the user's screen (or a specific display) and return it as a base64 JPEG plus the display dimensions. Use this whenever you need to see what's currently on screen — at the start of a task, after any computer_* write action, or when the user mentions something visible. Each call replaces the prior screenshot in your view; older screenshots are dropped from context to save tokens (their text body remains).`,
+        parameters: {
+            type: 'object',
+            properties: {
+                display_index: {
+                    type: 'number',
+                    description: 'Optional index into computer_screen_size().displays. Omit for the primary display.',
+                },
+            },
+        },
+    },
+};
+
+const COMPUTER_SCREEN_SIZE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_screen_size',
+        description: `Return information about all connected displays: index, position (x, y), dimensions, DPI scale, primary flag, and name. Use before computer_screenshot when the user has a multi-monitor setup, or to size coordinates for a future computer_* click.`,
+        parameters: { type: 'object', properties: {} },
+    },
+};
+
+const COMPUTER_CURSOR_POSITION_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_cursor_position',
+        description: `Return the current mouse cursor position as { x, y } in virtual-desktop coordinates. Read-only and autonomous. On Wayland-only Linux this returns an error by design (no global cursor API).`,
+        parameters: { type: 'object', properties: {} },
+    },
+};
+
+const COMPUTER_TOOLS: Tool[] = [
+    COMPUTER_SCREENSHOT_TOOL,
+    COMPUTER_SCREEN_SIZE_TOOL,
+    COMPUTER_CURSOR_POSITION_TOOL,
+];
+
+function activeModelSupportsVision(modelConfig: ModelConfig): boolean {
+    if (modelConfig.provider === ModelProvider.OpenAICompatible) {
+        try {
+            const { getActiveProvider } = require('./savedProviders') as {
+                getActiveProvider: () => { supportsVision?: boolean } | undefined;
+            };
+            return !!getActiveProvider()?.supportsVision;
+        } catch {
+            return false;
+        }
+    }
+    if (modelConfig.provider === ModelProvider.LlamaCpp) {
+        const id = (modelConfig.modelId ?? '').toLowerCase();
+        return /(vl|vision|llava|moondream|ui-tars|tars)/.test(id);
+    }
+    return false;
+}
+
+export function canUseComputerTools(modelConfig: ModelConfig): boolean {
+    if (!featureFlags.computerUseAgent) return false;
+    return activeModelSupportsVision(modelConfig);
+}
+
 // Native function calling tool: search across the user's prior conversations.
 // Use this when the user references something from a previous chat ("the script
 // we wrote last week", "remember when…", "what did we decide about X").
@@ -426,6 +506,9 @@ export async function runInference(
         if (featureFlags.memoryCrossConversationSearch) {
             tools.push(SEARCH_CONVERSATIONS_TOOL);
         }
+        if (canUseComputerTools(request.modelConfig)) {
+            tools.push(...COMPUTER_TOOLS);
+        }
         requestWithSystem = {
             ...requestWithSystem,
             tools,
@@ -578,7 +661,29 @@ Arguments:
 
 Returns: Array of {id, title, updated, snippets[]} for matching conversations.
 
-Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}`;
+Do NOT call this for things you can answer from the current conversation or current file system. Calling unnecessarily wastes tokens.` : ''}
+
+${canUseComputerTools(request.modelConfig) ? `## Computer-use tools (read-only, CU-M2)
+
+The agent can see the user's screen and cursor. These three tools are autonomous (no user approval). Write tools — clicking, typing, key presses — land in CU-M3 and will route through approval cards.
+
+### computer_screenshot
+Captures the screen and returns { screenshot, width, height, displayIndex, x, y }. Use whenever you need to see what's on screen. Each call replaces the prior screenshot in your view; older screenshots drop from context (their text body stays — same retention as browser_observe).
+Arguments: display_index (number, optional — omit for the primary display).
+
+### computer_screen_size
+Returns information about every connected display: { index, x, y, width, height, scaleFactor, isPrimary, name }. Call this before computer_screenshot in multi-monitor setups, or to plan future click coordinates.
+Arguments: none.
+
+### computer_cursor_position
+Returns { x, y } in virtual-desktop coordinates. Useful before computer_screenshot to know where the user is looking. On Wayland-only Linux this returns a clear error (no global cursor API) — handle gracefully.
+Arguments: none.
+
+USAGE PATTERN (CU-M2 read-only):
+  1. computer_screen_size   # learn the display layout
+  2. computer_screenshot    # see the screen
+  3. … reason about the screenshot
+  Tell the user what you observed in plain language. Do not promise to click or type yet — those tools arrive in CU-M3.` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

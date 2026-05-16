@@ -13,6 +13,7 @@ mod skills;
 mod user_info;
 mod user_profile;
 mod audit_log;
+mod computer_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -102,7 +103,11 @@ pub fn run() {
         // User info
         user_info::get_user_name,
         // Audit log for destructive agent actions
-        audit_log::log_action_event
+        audit_log::log_action_event,
+        // Computer-use harness (CU-M2: read-only)
+        computer_commands::computer_screenshot,
+        computer_commands::computer_screen_size,
+        computer_commands::computer_cursor_position
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

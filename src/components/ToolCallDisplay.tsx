@@ -486,6 +486,73 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
                         );
                     })}
 
+                    {/* Computer-use inline preview (screenshot + display chip). */}
+                    {execution.actions?.map((action, idx) => {
+                        if (action.type !== 'computer_preview') return null;
+                        const p = action.payload;
+                        return (
+                            <div
+                                key={`computer-${idx}`}
+                                className={styles.section}
+                                style={{
+                                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                                    borderRadius: 8,
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        padding: '8px 12px',
+                                        background: tokens.colorNeutralBackground3,
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 2,
+                                    }}
+                                >
+                                    <Text size={200} weight="semibold">
+                                        {p.kind === 'computer_screenshot' ? 'Screen capture' :
+                                         p.kind === 'computer_screen_size' ? 'Display layout' :
+                                         p.kind === 'computer_cursor_position' ? 'Cursor position' :
+                                         p.kind}
+                                    </Text>
+                                    {typeof p.width === 'number' && typeof p.height === 'number' && (
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                            {p.width} × {p.height}
+                                            {typeof p.displayIndex === 'number' ? ` · display ${p.displayIndex}` : ''}
+                                        </Text>
+                                    )}
+                                    {typeof p.x === 'number' && typeof p.y === 'number' && p.kind === 'computer_cursor_position' && (
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                            ({p.x}, {p.y})
+                                        </Text>
+                                    )}
+                                    {Array.isArray(p.displays) && p.displays.length > 0 && (
+                                        <div style={{ marginTop: 4 }}>
+                                            {p.displays.map((d) => (
+                                                <Text key={d.index} size={200} style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                                                    [{d.index}] {d.name} · {d.width}×{d.height} @ ({d.x}, {d.y}) · scale {d.scaleFactor}{d.isPrimary ? ' · primary' : ''}
+                                                </Text>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                {p.screenshot && (
+                                    <img
+                                        src={`data:image/jpeg;base64,${p.screenshot}`}
+                                        alt="screen capture"
+                                        style={{
+                                            display: 'block',
+                                            width: '100%',
+                                            maxHeight: 400,
+                                            objectFit: 'contain',
+                                            background: tokens.colorNeutralBackground1,
+                                        }}
+                                    />
+                                )}
+                            </div>
+                        );
+                    })}
+
                     {/* Result Section (if available) */}
                     {execution.result && !execution.error && (
                         <div className={styles.section}>

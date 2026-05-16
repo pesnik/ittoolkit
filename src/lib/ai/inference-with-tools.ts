@@ -159,6 +159,11 @@ async function executeTool(
     content: string;
     isError: boolean;
     actions?: ToolResultAction[];
+    /** Base64 JPEGs to attach as image content blocks on the tool-result
+     *  message. Populated by computer_screenshot. */
+    images?: string[];
+    /** Pre-built preview blob the chip renders for this call. */
+    preview?: Record<string, unknown>;
 }> {
     const normalized = unwrapNestedToolCall(toolCall);
     console.log('[inference-with-tools] dispatch:', {
@@ -174,14 +179,119 @@ async function executeTool(
     if (normalized.name === 'search_conversations') {
         return executeSearchConversations(normalized.arguments);
     }
+    if (normalized.name.startsWith('computer_')) {
+        return executeComputerTool(normalized.name, normalized.arguments);
+    }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "agent_action" (action, paths). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "agent_action" (action, paths), "computer_screenshot" / "computer_screen_size" / "computer_cursor_position". Use one of these exact names.`,
             isError: true,
         };
     }
     return executeShellCommand(normalized.arguments);
+}
+
+interface ComputerScreenshotResult {
+    screenshot: string;
+    width: number;
+    height: number;
+    displayIndex: number;
+    x: number;
+    y: number;
+}
+
+interface ComputerDisplayInfo {
+    index: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleFactor: number;
+    isPrimary: boolean;
+    name: string;
+}
+
+interface ComputerScreenSizeResult {
+    displays: ComputerDisplayInfo[];
+}
+
+interface ComputerCursorPosResult {
+    x: number;
+    y: number;
+}
+
+async function executeComputerTool(
+    toolName: string,
+    args: Record<string, unknown>,
+): Promise<{
+    content: string;
+    isError: boolean;
+    images?: string[];
+    preview?: Record<string, unknown>;
+}> {
+    try {
+        if (toolName === 'computer_screenshot') {
+            const result = await invoke<ComputerScreenshotResult>('computer_screenshot', {
+                displayIndex: typeof args.display_index === 'number' ? args.display_index : null,
+            });
+            // Notify the main-pane ComputerView so it can update its viewport.
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('computer-view-update', {
+                    detail: {
+                        screenshot: result.screenshot,
+                        width: result.width,
+                        height: result.height,
+                        displayIndex: result.displayIndex,
+                    },
+                }));
+            }
+            const content = `Captured display ${result.displayIndex} (${result.width}×${result.height} at virtual (${result.x}, ${result.y})). Screenshot attached.`;
+            return {
+                content,
+                isError: false,
+                images: [result.screenshot],
+                preview: {
+                    kind: 'computer_screenshot',
+                    width: result.width,
+                    height: result.height,
+                    displayIndex: result.displayIndex,
+                    screenshot: result.screenshot,
+                },
+            };
+        }
+        if (toolName === 'computer_screen_size') {
+            const result = await invoke<ComputerScreenSizeResult>('computer_screen_size');
+            const lines = ['Displays:'];
+            for (const d of result.displays) {
+                lines.push(
+                    `  [${d.index}] ${d.name} — ${d.width}×${d.height} @ (${d.x}, ${d.y}), scale ${d.scaleFactor}${d.isPrimary ? ' (primary)' : ''}`,
+                );
+            }
+            return {
+                content: lines.join('\n'),
+                isError: false,
+                preview: { kind: 'computer_screen_size', displays: result.displays },
+            };
+        }
+        if (toolName === 'computer_cursor_position') {
+            const result = await invoke<ComputerCursorPosResult>('computer_cursor_position');
+            return {
+                content: `Cursor at (${result.x}, ${result.y}).`,
+                isError: false,
+                preview: { kind: 'computer_cursor_position', x: result.x, y: result.y },
+            };
+        }
+        return {
+            content: `Unknown computer tool "${toolName}". Available: computer_screenshot, computer_screen_size, computer_cursor_position.`,
+            isError: true,
+        };
+    } catch (err) {
+        return {
+            content: `${toolName} failed: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+        };
+    }
 }
 
 /** Handle agent_action tool call: validate arguments at the LLM/UI boundary,
@@ -594,9 +704,19 @@ export async function runInferenceWithTools(
                 if (result.isError) {
                     toolExecution.error = result.content;
                 }
-                if (result.actions?.length) {
-                    toolExecution.actions = result.actions;
+                // Tools may emit either structured `actions` (agent_action) or
+                // a `preview` blob (computer_*). Surface them through the
+                // same `actions` channel; computer previews are tagged with
+                // a distinct action type.
+                const surfacedActions: ToolResultAction[] = [];
+                if (result.actions?.length) surfacedActions.push(...result.actions);
+                if (result.preview) {
+                    surfacedActions.push({
+                        type: 'computer_preview',
+                        payload: result.preview as Extract<ToolResultAction, { type: 'computer_preview' }>['payload'],
+                    });
                 }
+                if (surfacedActions.length) toolExecution.actions = surfacedActions;
 
                 allToolExecutions.push(toolExecution);
 
@@ -608,7 +728,7 @@ export async function runInferenceWithTools(
                         result: result.content,
                         error: result.isError ? result.content : undefined,
                         executionTimeMs,
-                        actions: result.actions?.length ? result.actions : undefined,
+                        actions: surfacedActions.length ? surfacedActions : undefined,
                     });
                 }
 
@@ -617,6 +737,7 @@ export async function runInferenceWithTools(
                     role: MessageRole.User,
                     content: formatToolResult(toolCall.name, result.content, result.isError),
                     timestamp: Date.now(),
+                    images: result.images,
                 };
 
                 toolResults.push(toolResultMessage);

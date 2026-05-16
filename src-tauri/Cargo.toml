@@ -42,6 +42,11 @@ fs_extra = "1.3"
 serde_yaml = "0.9"
 slug = "0.1"
 
+# Computer-use harness (Phase 2)
+xcap = "0.8"           # cross-platform screen capture (macOS / Windows / Linux X11+Wayland)
+image = "0.25"         # JPEG encoding for screenshot output
+base64 = "0.22"        # base64 encode the JPEG bytes
+# enigo lands in CU-M3 (write tools); not needed for screenshot-only milestone
 
 # Partition Management
 gptman = "1.0"  # GPT partition table parsing
