@@ -64,6 +64,58 @@ For directory sizes: du -sh <dir>/*`,
     },
 };
 
+// Native function calling tool: emit structured UI actions (clickable paths,
+// confirmation dialogs, file highlights). The agent calls this INSTEAD of
+// describing paths in plain text — the UI renders these actions natively so
+// the user can click, browse, and confirm visually.
+const AGENT_ACTION_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'agent_action',
+        description: `Emit a structured action that the app renders natively as clickable paths, confirmation dialogs, or file highlights.
+
+Use this INSTEAD of writing file paths in plain text. The app shows chips, dialogs, and navigation — much better than text.
+
+Examples:
+• After du -sh, call agent_action with action="navigate" and paths=["/Users/name/Library/Caches"] to let the user click and browse
+• After listing files to delete, call agent_action with action="confirm_action", paths=[...], title="Delete 3 caches", description="These are safe to remove", totalSize=<bytes>, severity="low" to show a native confirmation dialog
+• For files the user should inspect, call agent_action with action="open_file" and paths=["..."]`,
+        parameters: {
+            type: 'object',
+            properties: {
+                action: {
+                    type: 'string',
+                    enum: ['navigate', 'open_file', 'highlight', 'confirm_action'],
+                    description: 'What kind of UI action to emit.',
+                },
+                paths: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'One or more file/directory paths. For navigate/open_file, the app uses the first path.',
+                },
+                title: {
+                    type: 'string',
+                    description: 'Title for the confirmation dialog (required for confirm_action).',
+                },
+                description: {
+                    type: 'string',
+                    description: 'Explanation shown in the dialog body (required for confirm_action).',
+                },
+                totalSize: {
+                    type: 'number',
+                    description: 'Total size in bytes of the items (for confirm_action display).',
+                },
+                severity: {
+                    type: 'string',
+                    enum: ['low', 'medium', 'high'],
+                    description: 'Risk level shown as a colored badge (default: low).',
+                },
+            },
+            required: ['action', 'paths'],
+        },
+    },
+};
+
 // Native function calling tool: search across the user's prior conversations.
 // Use this when the user references something from a previous chat ("the script
 // we wrote last week", "remember when…", "what did we decide about X").
@@ -355,7 +407,7 @@ export async function runInference(
         !request.suppressTools &&
         [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)
     ) {
-        const tools: Tool[] = [EXECUTE_COMMAND_TOOL];
+        const tools: Tool[] = [EXECUTE_COMMAND_TOOL, AGENT_ACTION_TOOL];
         if (featureFlags.memoryCrossConversationSearch) {
             tools.push(SEARCH_CONVERSATIONS_TOOL);
         }
@@ -453,6 +505,23 @@ IMPORTANT USAGE RULES:
 - Default timeout is 30 seconds. Use timeout_secs for long-running operations.
 - Security-blocked commands include: destructive system operations, privilege escalation, shutdown commands.
 - File-reading commands (cat/less/more/head/tail/bat/od/xxd/strings) and write/move commands (rm/mv/cp/dd, shell redirects) prompt the user for explicit approval before executing.
+
+## agent_action Tool
+
+Emit a structured action that the app renders natively as clickable paths, confirmation dialogs, or file highlights. Use this INSTEAD of writing file paths in plain text — the user can click, browse, and confirm visually.
+
+Tool: agent_action
+Arguments:
+  - action (string, required): "navigate" (browse folder), "open_file" (open file), "highlight" (mark items), "confirm_action" (confirmation dialog).
+  - paths (array of strings, required): One or more file paths.
+  - title (string, optional): Confirmation dialog title.
+  - description (string, optional): Confirmation dialog body text.
+  - totalSize (number, optional): Total bytes for dialog display.
+  - severity (string, optional): "low", "medium", or "high".
+
+Returns: Confirmation that the action was rendered.
+
+IMPORTANT: Always call this tool for any file paths you want the user to interact with. Plain text paths are not clickable.
 
 ${featureFlags.memoryCrossConversationSearch ? `## search_conversations Tool
 

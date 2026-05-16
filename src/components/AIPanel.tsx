@@ -25,6 +25,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { AIChat } from './AIChat';
 import { HistorySidebar } from './HistorySidebar';
+import { AgentConfirmationDialog, ConfirmationPayload } from './AgentConfirmationDialog';
 import {
     AIMode,
     ChatMessage,
@@ -170,6 +171,10 @@ interface AIPanelProps {
     onClose: () => void;
     fsContext?: FileSystemContext;
     className?: string;
+    /** When set to a non-empty string, the chat input box is pre-filled with
+     *  this value. Used by the "Ask Agent" flow to paste selected file paths
+     *  so the user can type their intent before sending. */
+    prefillInput?: string;
 }
 
 export const AIPanel = ({
@@ -177,6 +182,7 @@ export const AIPanel = ({
     onClose,
     fsContext,
     className,
+    prefillInput,
 }: AIPanelProps) => {
     const styles = useStyles();
 
@@ -237,6 +243,9 @@ export const AIPanel = ({
         resolve: (value: boolean) => void;
     } | null>(null);
     const rejectConfirmRef = useRef<(() => void) | null>(null);
+
+    // Agent-initiated confirmation dialog (Phase 5 — confirm_action)
+    const [agentConfirmPayload, setAgentConfirmPayload] = useState<ConfirmationPayload | null>(null);
 
     const handleDownloadModel = async (modelId: string, provider: ModelProvider) => {
         if (provider !== ModelProvider.LlamaCpp) return;
@@ -520,6 +529,27 @@ export const AIPanel = ({
         void refreshUserProfileCache();
     }, []);
 
+
+
+    // Phase 5: detect confirm_action in the latest assistant message's tool
+    // executions and show the agent-initiated confirmation dialog.
+    useEffect(() => {
+        if (agentConfirmPayload) return;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i];
+            if (msg.role !== MessageRole.Assistant) continue;
+            for (const ex of msg.toolExecutions ?? []) {
+                for (const action of ex.actions ?? []) {
+                    if (action.type === 'confirm_action') {
+                        setAgentConfirmPayload(action.payload);
+                        return;
+                    }
+                }
+            }
+            break;
+        }
+    }, [messages, agentConfirmPayload]);
+
     const handleNewChat = useCallback(() => {
         setActiveConversation(null);
         setMessages([]);
@@ -657,6 +687,18 @@ export const AIPanel = ({
                 setCurrentSessionId(null);
             }
         }
+    };
+
+    const handleAgentConfirm = (actionId: string) => {
+        setAgentConfirmPayload(null);
+        const msg = `**Action Confirmed:** ${actionId}\nProceed with the operation as described.`;
+        handleSendMessage(msg);
+    };
+
+    const handleAgentCancel = (actionId: string) => {
+        setAgentConfirmPayload(null);
+        const msg = `**Action Rejected:** ${actionId}\nDo not proceed with this operation.`;
+        handleSendMessage(msg);
     };
 
     const handleSendMessage = async (content: string) => {
@@ -1194,6 +1236,7 @@ export const AIPanel = ({
                         loadingStatus="Thinking..."
                         placeholder="Ask anything, or type / to invoke a skill"
                         skills={skills}
+                        prefillInput={prefillInput}
                     />
                 )}
             </div>
@@ -1220,6 +1263,14 @@ export const AIPanel = ({
                     onDownloadModel={handleDownloadModel}
                 />
             )}
+
+            {/* Agent-initiated confirmation dialog (Phase 5) */}
+            <AgentConfirmationDialog
+                open={agentConfirmPayload !== null}
+                payload={agentConfirmPayload}
+                onConfirm={handleAgentConfirm}
+                onCancel={handleAgentCancel}
+            />
 
             {/* Confirmation dialog for write (destructive) or read (privacy-sensitive) commands */}
             {pendingConfirmation && (
