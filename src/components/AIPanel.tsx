@@ -75,6 +75,7 @@ import {
     formatSkillCatalog,
     parseSkillInvocation,
 } from '@/lib/skills/store';
+import { logActionEvent } from '@/lib/agent/audit';
 
 const useStyles = makeStyles({
     container: {
@@ -938,6 +939,15 @@ export const AIPanel = ({
                                     suggestedWorkingDir: action.payload.suggestedWorkingDir,
                                     items: action.payload.items,
                                 });
+                                logActionEvent({
+                                    kind: 'emit',
+                                    actionId: action.payload.actionId,
+                                    severity: action.payload.severity,
+                                    title: action.payload.title,
+                                    paths: action.payload.items,
+                                    suggestedCommand: action.payload.suggestedCommand,
+                                    suggestedWorkingDir: action.payload.suggestedWorkingDir,
+                                });
                             }
                         }
                     }
@@ -1125,6 +1135,15 @@ export const AIPanel = ({
         }
 
         if (response === 'dismiss') {
+            logActionEvent({
+                kind: 'dismiss',
+                actionId,
+                severity: pending.severity,
+                title: pending.title,
+                paths: pending.items,
+                suggestedCommand: pending.suggestedCommand,
+                suggestedWorkingDir: pending.suggestedWorkingDir,
+            });
             handleSendMessage(
                 `[user dismissed action ${actionId}: "${pending.title}"]\n` +
                 `Do NOT run \`${pending.suggestedCommand}\`. Acknowledge briefly and wait for the user's next instruction.`,
@@ -1136,6 +1155,7 @@ export const AIPanel = ({
         // gate execute_command goes through (shell_classify::is_blocked + read/write
         // confirmation prompts). The model never gets a chance to swap the command.
         let outcome: string;
+        let exitCode = -1;
         try {
             const result = await invoke<{
                 stdout: string;
@@ -1147,12 +1167,24 @@ export const AIPanel = ({
                 workingDir: pending.suggestedWorkingDir,
                 timeoutSecs: null,
             });
+            exitCode = result.exit_code;
             const body = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
             outcome = `exit ${result.exit_code}${result.timed_out ? ' (timed out)' : ''}\n` +
                 `\`\`\`\n${body || '(no output)'}\n\`\`\``;
         } catch (e) {
             outcome = `execution failed: ${e instanceof Error ? e.message : String(e)}`;
         }
+
+        logActionEvent({
+            kind: 'confirm',
+            actionId,
+            severity: pending.severity,
+            title: pending.title,
+            paths: pending.items,
+            suggestedCommand: pending.suggestedCommand,
+            suggestedWorkingDir: pending.suggestedWorkingDir,
+            exitCode,
+        });
 
         handleSendMessage(
             `[user confirmed action ${actionId}: "${pending.title}"]\n` +

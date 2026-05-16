@@ -12,6 +12,7 @@ mod conversations;
 mod skills;
 mod user_info;
 mod user_profile;
+mod audit_log;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -99,7 +100,9 @@ pub fn run() {
         skills::set_skill_trusted,
         skills::open_skills_folder,
         // User info
-        user_info::get_user_name
+        user_info::get_user_name,
+        // Audit log for destructive agent actions
+        audit_log::log_action_event
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
