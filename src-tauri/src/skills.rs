@@ -136,6 +136,94 @@ pub struct SkillManifest {
     pub trusted: bool,
 }
 
+#[cfg(test)]
+mod compat_tests {
+    //! Anthropic Agent Skills compatibility (CU-M6).
+    //!
+    //! Anthropic's SKILL.md spec requires exactly two frontmatter fields:
+    //! `name` and `description`. Everything else is optional / extension.
+    //! Our parser is a superset; these tests pin the floor so we don't
+    //! drift incompatible with skills published at agentskills.io or
+    //! github.com/anthropics/skills.
+    //!
+    //! Fixtures below are representative excerpts of the official
+    //! Anthropic skills — copied verbatim from their frontmatter and
+    //! trimmed to keep the test deterministic. If Anthropic adds a
+    //! required field upstream, add a fixture here and fail loudly.
+    use super::*;
+    use std::path::PathBuf;
+
+    fn parse_or_fail(content: &str, label: &str) -> SkillManifest {
+        let (fm, body) = split_frontmatter(content)
+            .unwrap_or_else(|| panic!("{}: frontmatter must parse", label));
+        let dir = PathBuf::from("/tmp/skill-fixture").join(label);
+        build_manifest(&dir, fm, body, &SkillState::default())
+    }
+
+    #[test]
+    fn minimum_anthropic_spec_two_fields() {
+        // The bare minimum per spec.anthropic.com — just name + description.
+        let s = "---\nname: minimal\ndescription: A bare-minimum skill.\n---\n\n# body\n";
+        let m = parse_or_fail(s, "minimal");
+        assert_eq!(m.name, "minimal");
+        assert_eq!(m.description, "A bare-minimum skill.");
+        assert!(!m.disable_model_invocation, "default disable_model_invocation must be false");
+        assert!(m.user_invocable, "default user_invocable must be true");
+    }
+
+    #[test]
+    fn pdf_skill_shape() {
+        // Mirrors github.com/anthropics/skills/pdf/SKILL.md frontmatter.
+        let s = "---\nname: pdf\ndescription: Tools and best practices for working with PDF files, including extracting text and tables, creating new PDFs from templates, and validating that documents render correctly.\n---\n\n# PDF Skill\n";
+        let m = parse_or_fail(s, "pdf");
+        assert_eq!(m.name, "pdf");
+        assert!(m.description.contains("PDF"));
+    }
+
+    #[test]
+    fn pptx_skill_shape() {
+        // Mirrors github.com/anthropics/skills/pptx/SKILL.md frontmatter.
+        let s = "---\nname: pptx\ndescription: Create, edit, and analyze Microsoft PowerPoint presentations programmatically — slide creation, layout management, and rendering verification.\n---\n\n# PPTX Skill\n";
+        let m = parse_or_fail(s, "pptx");
+        assert_eq!(m.name, "pptx");
+    }
+
+    #[test]
+    fn description_is_required_for_meaningful_pickup() {
+        // Anthropic uses description as the relevance signal at planner-
+        // load time (~100 tokens / skill). We accept absent descriptions
+        // by falling back to the first non-empty body line — verify that.
+        let s = "---\nname: implicit-desc\n---\n\nFirst meaningful line.\nSecond line.\n";
+        let m = parse_or_fail(s, "implicit-desc");
+        assert!(m.description.contains("First meaningful line"));
+    }
+
+    #[test]
+    fn extension_fields_dont_break_compat() {
+        // ittoolkit's extensions (when_to_use, allowed-tools, etc.)
+        // should be ignored gracefully by parsers that don't know them.
+        // We test the reverse direction here: a SKILL.md carrying ONLY
+        // our extension fields (without Anthropic's required pair)
+        // should still parse because every field is optional in our model.
+        let s = "---\nallowed-tools:\n  - execute_command\nargument-hint: \"<path>\"\n---\n\nbody\n";
+        let m = parse_or_fail(s, "extensions-only");
+        // Falls back to dir name for `name` (last segment of /tmp/skill-fixture/extensions-only).
+        assert_eq!(m.name, "extensions-only");
+        assert_eq!(m.allowed_tools, vec!["execute_command".to_string()]);
+    }
+
+    #[test]
+    fn frontmatter_with_blank_lines_inside_yaml() {
+        // Some published skills format their YAML with paragraph-style
+        // descriptions that contain blank lines. Make sure our splitter
+        // handles them.
+        let s = "---\nname: blank-lines\ndescription: |\n  Line one.\n\n  Line two after blank.\n---\n\nbody\n";
+        let m = parse_or_fail(s, "blank-lines");
+        assert!(m.description.contains("Line one"));
+        assert!(m.description.contains("Line two"));
+    }
+}
+
 fn yaml_value_to_string_list(v: &serde_yaml::Value) -> Vec<String> {
     match v {
         serde_yaml::Value::String(s) => s
