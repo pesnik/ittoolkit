@@ -195,6 +195,11 @@ export const KNOWN_MODELS: ModelConfig[] = [
         modelId: 'Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.7, topP: 0.9, maxTokens: 2048, stream: true, contextWindow: 32_768 },
         recommendedFor: [AIMode.Agent], sizeBytes: 2.0e9
     },
+    {
+        id: 'llamacpp-qwen7b', name: 'Qwen 2.5 7B Instruct (Q4_K_M)', provider: ModelProvider.LlamaCpp, isAvailable: false,
+        modelId: 'Qwen2.5-7B-Instruct-Q4_K_M.gguf', parameters: { temperature: 0.4, topP: 0.9, maxTokens: 4096, stream: true, contextWindow: 32_768 },
+        recommendedFor: [AIMode.Agent], sizeBytes: 4.68e9
+    },
     // OpenAI-compatible - Generic entries for BYOK providers (OpenRouter, etc.).
     // contextWindow stays unset here so the saved preset's value drives it.
     {
