@@ -45,6 +45,7 @@ export interface OpenOptions {
     sessionId: string;
     profile: 'ephemeral' | 'persistent';
     viewport?: { width: number; height: number };
+    headed?: boolean;
 }
 
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
@@ -61,12 +62,13 @@ export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
     if (existing) return existing;
 
     const viewport = opts.viewport ?? DEFAULT_VIEWPORT;
+    const headless = !(opts.headed ?? false);
 
     if (opts.profile === 'persistent') {
         const dir = profileDir(opts.sessionId);
         await mkdir(dir, { recursive: true });
         const context = await chromium.launchPersistentContext(dir, {
-            headless: true,
+            headless,
             viewport,
         });
         const page = context.pages()[0] ?? (await context.newPage());
@@ -82,7 +84,7 @@ export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
         return ref;
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless });
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
     const ref: SessionRef = {

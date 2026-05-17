@@ -169,6 +169,10 @@ const BROWSER_OPEN_TOOL: Tool = {
                     },
                     description: 'Optional viewport size; defaults to 1280x800.',
                 },
+                headed: {
+                    type: 'boolean',
+                    description: 'false (default): headless, no visible browser window. true: open a visible browser window so you or the user can see what is happening. Use headed=true for login flows, CAPTCHAs, or any interaction where the user needs to see or intervene.',
+                },
             },
             required: ['session_id'],
         },

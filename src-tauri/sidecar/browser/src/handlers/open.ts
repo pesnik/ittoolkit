@@ -4,6 +4,7 @@ interface OpenParams {
     session_id?: string;
     profile?: 'ephemeral' | 'persistent';
     viewport?: { width: number; height: number };
+    headed?: boolean;
 }
 
 export async function handleOpen(params: OpenParams): Promise<{ session_id: string }> {
@@ -14,6 +15,7 @@ export async function handleOpen(params: OpenParams): Promise<{ session_id: stri
         sessionId: params.session_id,
         profile: params.profile === 'persistent' ? 'persistent' : 'ephemeral',
         viewport: params.viewport,
+        headed: params.headed,
     });
     return { session_id: params.session_id };
 }
