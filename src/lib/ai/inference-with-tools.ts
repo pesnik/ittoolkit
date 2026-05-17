@@ -5,6 +5,7 @@ import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags 
 import { runtimeSettings } from '@/lib/runtimeSettings';
 import { classifyShellCommand } from './shell-classify';
 import { classifyComputerAction, describeComputerAction } from './computer-classify';
+import { mcpCall, MCP_TOOL_SEPARATOR } from '@/lib/mcp/client';
 
 export interface ToolExecutionEvent {
     /** Unique per call within a turn. The model can invoke the same tool
@@ -101,6 +102,63 @@ function parseCoords(text: string): { x: number; y: number } | null {
         return { x: parseInt(labeledMatch[1], 10), y: parseInt(labeledMatch[2], 10) };
     }
     return null;
+}
+
+async function executeMcpTool(
+    toolName: string,
+    args: Record<string, unknown>,
+): Promise<{
+    content: string;
+    isError: boolean;
+    preview?: Record<string, unknown>;
+}> {
+    const sep = toolName.indexOf(MCP_TOOL_SEPARATOR);
+    if (sep < 0) {
+        return { content: `Malformed MCP tool name "${toolName}".`, isError: true };
+    }
+    const serverId = toolName.slice(0, sep);
+    const remoteName = toolName.slice(sep + MCP_TOOL_SEPARATOR.length);
+    try {
+        const result = await mcpCall(serverId, remoteName, args);
+        // MCP tools/call returns { content: ContentBlock[], isError? }.
+        const content = extractMcpText(result);
+        const isError = !!(result as { isError?: boolean })?.isError;
+        return {
+            content,
+            isError,
+            preview: {
+                kind: 'mcp_call',
+                serverId,
+                tool: remoteName,
+                isError,
+            },
+        };
+    } catch (err) {
+        return {
+            content: `MCP call "${toolName}" failed: ${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+        };
+    }
+}
+
+function extractMcpText(result: unknown): string {
+    if (!result || typeof result !== 'object') return JSON.stringify(result ?? '');
+    const blocks = (result as { content?: unknown }).content;
+    if (!Array.isArray(blocks)) return JSON.stringify(result);
+    const parts: string[] = [];
+    for (const b of blocks) {
+        if (b && typeof b === 'object') {
+            const type = (b as { type?: string }).type;
+            if (type === 'text') {
+                parts.push(String((b as { text?: string }).text ?? ''));
+            } else if (type === 'image') {
+                parts.push(`[image: ${(b as { mimeType?: string }).mimeType ?? 'image'}]`);
+            } else {
+                parts.push(JSON.stringify(b));
+            }
+        }
+    }
+    return parts.join('\n') || JSON.stringify(result);
 }
 
 async function executeComputerFind(args: Record<string, unknown>): Promise<{
@@ -406,6 +464,9 @@ async function executeTool(
     }
     if (normalized.name.startsWith('computer_')) {
         return executeComputerTool(normalized.name, normalized.arguments);
+    }
+    if (normalized.name.includes(MCP_TOOL_SEPARATOR)) {
+        return executeMcpTool(normalized.name, normalized.arguments);
     }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);

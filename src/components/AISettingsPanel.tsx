@@ -45,6 +45,7 @@ import { loadAIConfig } from '@/lib/ai/config';
 import { SkillsPanel } from './SkillsPanel';
 import { SavedProvidersPanel } from './SavedProvidersPanel';
 import { MemorySettingsSection } from './MemorySettingsSection';
+import { McpServersPanel } from './McpServersPanel';
 import {
     FEATURE_FLAG_CHANGE_EVENT,
     FeatureFlag,
@@ -903,7 +904,14 @@ export function AISettingsPanel({
                                 )}
 
                                 {selectedTab === 'advanced' && (
-                                    <MemorySettingsSection />
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+                                        <MemorySettingsSection />
+                                        {featureFlags.mcpServer && (
+                                            <div>
+                                                <McpServersPanel />
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                             </div>
 

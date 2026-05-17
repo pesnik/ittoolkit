@@ -27,6 +27,7 @@ import { buildFileSystemContext } from './context-builder';
 import { getTemplateForMode, buildPrompt } from './prompts';
 import { trimToTokenBudget, DEFAULT_WINDOW_CONFIG } from './memory/windowing';
 import { trimScreenshotPayload } from './memory/screenshot-retention';
+import { gatherMcpTools } from '@/lib/mcp/client';
 import { featureFlags } from '@/lib/featureFlags';
 import { getCachedUserProfile, buildProfileSystemFragment } from './memory/profile-cache';
 import { computeMemoryBudget } from './memory/budget';
@@ -664,6 +665,15 @@ export async function runInference(
         }
         if (canUseComputerTools(request.modelConfig)) {
             tools.push(...COMPUTER_TOOLS);
+        }
+        // External MCP servers contribute their tools dynamically per turn.
+        // Off behind a feature flag in practice — gatherMcpTools returns
+        // empty when no servers are configured in ~/.ittoolkit/mcp-clients.json.
+        try {
+            const { tools: mcpTools } = await gatherMcpTools();
+            if (mcpTools.length) tools.push(...mcpTools);
+        } catch (e) {
+            console.warn('[ai-service] gatherMcpTools failed; continuing without MCP tools:', e);
         }
         requestWithSystem = {
             ...requestWithSystem,

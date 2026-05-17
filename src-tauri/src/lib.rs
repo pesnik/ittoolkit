@@ -15,6 +15,9 @@ mod user_profile;
 mod audit_log;
 mod computer_classify;
 mod computer_commands;
+mod mcp_client;
+pub mod mcp_server;
+mod mcp_types;
 mod perception_commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,6 +39,7 @@ pub fn run() {
     .manage(ai_commands::InferenceState::default())
     .manage(computer_commands::ComputerState::default())
     .manage(perception_commands::PerceptionSupervisor::default())
+    .manage(mcp_client::McpClientState::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -125,7 +129,14 @@ pub fn run() {
         computer_commands::computer_kill,
         // Perception sidecar (CU-M4: OmniParser → UI-TARS grounding chain)
         perception_commands::perception_rpc,
-        perception_commands::perception_shutdown
+        perception_commands::perception_shutdown,
+        // MCP client (CU-M5: consume external MCP servers)
+        mcp_client::mcp_clients_list,
+        mcp_client::mcp_clients_upsert,
+        mcp_client::mcp_clients_remove,
+        mcp_client::mcp_client_tools,
+        mcp_client::mcp_client_call,
+        mcp_client::mcp_client_shutdown
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
