@@ -196,6 +196,9 @@ async function executeTool(
     if (normalized.name === 'web_search') {
         return executeWebSearch(normalized.arguments);
     }
+    if (normalized.name === 'run_workflow') {
+        return executeRunWorkflow(normalized.arguments);
+    }
     if (normalized.name.startsWith('browser_')) {
         return executeBrowserTool(normalized.name, normalized.arguments);
     }
@@ -729,6 +732,33 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<{
     } catch (e) {
         return { content: `web_search failed: ${e}`, isError: true };
     }
+}
+
+async function executeRunWorkflow(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const slug = (args.slug as string | undefined)?.trim();
+    const variables = (args.variables as Record<string, unknown> | undefined) ?? {};
+
+    if (!slug) {
+        return { content: 'run_workflow: required argument "slug" is missing.', isError: true };
+    }
+
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('workflow:run', {
+            detail: { slug, variables },
+        }));
+    }
+
+    const varSummary = Object.keys(variables).length > 0
+        ? Object.entries(variables).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
+        : '(no variables)';
+
+    return {
+        content: `Workflow '${slug}' launched with variables: ${varSummary}. The workflow panel is now open — the user can monitor progress there. Inform the user that the workflow has started.`,
+        isError: false,
+    };
 }
 
 export async function runInferenceWithTools(

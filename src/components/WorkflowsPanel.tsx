@@ -1,17 +1,9 @@
 'use client';
 
-/**
- * WorkflowsPanel — RPA capability seam (M4).
- *
- * Lists recorded workflows under ~/.ittoolkit/workflows/ and exposes
- * record / stop / replay controls. Empty by default — no pre-shipped
- * workflows. The user records a session by clicking Start, performing
- * the task once (the agent's browser_rpc calls are captured), clicking
- * Stop, and providing a name.
- *
- * Trust model in M4: replay actions auto-approve. A signed-skill flow
- * with per-action approval arrives in a later milestone.
- */
+// WorkflowsPanel — lists saved workflows, controls recording, and surfaces
+// incomplete runs for resumption. Recording now goes through a review step
+// (WorkflowRecordingReview) before saving so the user can label step intents,
+// confirm actor classifications, and approve variable parameterisation.
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -22,15 +14,29 @@ import {
     Button,
     Input,
     Spinner,
+    Badge,
 } from '@fluentui/react-components';
-import { Warning20Regular, Record16Regular, Stop16Regular, Play16Regular, Delete16Regular } from '@fluentui/react-icons';
-import { WorkflowReplayDialog } from './WorkflowReplayDialog';
+import {
+    Warning20Regular,
+    Record16Regular,
+    Stop16Regular,
+    Play16Regular,
+    Delete16Regular,
+    ArrowClockwise16Regular,
+} from '@fluentui/react-icons';
+import WorkflowRunPanel from './WorkflowRunPanel';
+import { WorkflowRecordingReview } from './WorkflowRecordingReview';
+import type { WorkflowStepV1, WorkflowFileV2, WorkflowRun } from '@/types/workflow-types';
+import type { ModelConfig } from '@/types/ai-types';
 
 interface WorkflowSummary {
     name: string;
     slug: string;
+    description?: string;
     createdAt: string;
     stepCount: number;
+    variableCount: number;
+    version: number;
     path: string;
 }
 
@@ -38,6 +44,10 @@ interface RecordingStatus {
     name: string;
     startedAt: string;
     stepCount: number;
+}
+
+interface Props {
+    modelConfig?: ModelConfig | null;
 }
 
 const useStyles = makeStyles({
@@ -98,23 +108,28 @@ const useStyles = makeStyles({
     },
 });
 
-export function WorkflowsPanel() {
+export function WorkflowsPanel({ modelConfig }: Props) {
     const styles = useStyles();
     const [list, setList] = useState<WorkflowSummary[]>([]);
+    const [incompleteRuns, setIncompleteRuns] = useState<WorkflowRun[]>([]);
     const [status, setStatus] = useState<RecordingStatus | null>(null);
     const [name, setName] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [replaying, setReplaying] = useState<{ slug: string; name: string } | null>(null);
+    const [replaying, setReplaying] = useState<{ slug: string; name: string; variables?: Record<string, unknown> } | null>(null);
+    // Raw steps captured during recording — held until review dialog is dismissed
+    const [pendingReview, setPendingReview] = useState<{ steps: WorkflowStepV1[]; name: string } | null>(null);
 
     const refresh = useCallback(async () => {
         try {
-            const [rows, recordingStatus] = await Promise.all([
+            const [rows, recordingStatus, runs] = await Promise.all([
                 invoke<WorkflowSummary[]>('workflow_list'),
                 invoke<RecordingStatus | null>('workflow_recording_status'),
+                invoke<WorkflowRun[]>('workflow_run_list_incomplete'),
             ]);
             setList(rows);
             setStatus(recordingStatus);
+            setIncompleteRuns(runs);
         } catch (e) {
             setError(String(e));
         }
@@ -122,20 +137,29 @@ export function WorkflowsPanel() {
 
     useEffect(() => {
         refresh();
-        const id = window.setInterval(refresh, 2_000); // polling step counter
+        const id = window.setInterval(refresh, 2_000);
         return () => window.clearInterval(id);
     }, [refresh]);
 
+    // Listen for agent-triggered workflow launches (from run_workflow tool)
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { slug: string; variables?: Record<string, unknown> };
+            if (!detail?.slug) return;
+            const found = list.find((w) => w.slug === detail.slug);
+            setReplaying({ slug: detail.slug, name: found?.name ?? detail.slug, variables: detail.variables });
+        };
+        window.addEventListener('workflow:run', handler);
+        return () => window.removeEventListener('workflow:run', handler);
+    }, [list]);
+
     const start = useCallback(async () => {
         const trimmed = name.trim();
-        if (!trimmed) {
-            setError('Workflow name is required.');
-            return;
-        }
+        if (!trimmed) { setError('Workflow name is required.'); return; }
         setLoading(true);
         setError(null);
         try {
-            await invoke('workflow_recording_start', { name: trimmed, modelUsed: null });
+            await invoke('workflow_recording_start', { name: trimmed, modelUsed: modelConfig?.modelId ?? null });
             setName('');
             window.dispatchEvent(new CustomEvent('workflow-recording-started'));
             await refresh();
@@ -144,14 +168,19 @@ export function WorkflowsPanel() {
         } finally {
             setLoading(false);
         }
-    }, [name, refresh]);
+    }, [name, modelConfig, refresh]);
 
     const stop = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            await invoke('workflow_recording_stop');
+            // workflow_recording_stop returns the WorkflowFile (v1) with captured steps
+            const result = await invoke<{ name: string; steps: WorkflowStepV1[] } | null>('workflow_recording_stop');
             window.dispatchEvent(new CustomEvent('workflow-recording-stopped'));
+            if (result && result.steps.length > 0) {
+                // Open review dialog instead of saving immediately
+                setPendingReview({ steps: result.steps, name: result.name });
+            }
             await refresh();
         } catch (e) {
             setError(String(e));
@@ -173,15 +202,13 @@ export function WorkflowsPanel() {
         }
     }, [refresh]);
 
+    const handleReviewSaved = useCallback(async (_wf: WorkflowFileV2) => {
+        setPendingReview(null);
+        await refresh();
+    }, [refresh]);
+
     return (
         <div className={styles.root}>
-            <div className={styles.banner}>
-                <Warning20Regular fontSize={16} style={{ flexShrink: 0 }} />
-                <span>
-                    Workflows are an early-access capability. Replay does not yet enforce per-step
-                    approval — only run workflows you recorded yourself and trust end-to-end.
-                </span>
-            </div>
             <div className={styles.header}>
                 <Text weight="semibold">Recording</Text>
                 <div className={styles.recordingRow}>
@@ -199,7 +226,7 @@ export function WorkflowsPanel() {
                                 disabled={loading}
                                 style={{ marginLeft: 'auto' }}
                             >
-                                Stop & save
+                                Stop & review
                             </Button>
                         </>
                     ) : (
@@ -227,21 +254,73 @@ export function WorkflowsPanel() {
                     </Text>
                 )}
             </div>
+
             <div className={styles.list}>
-                {list.length === 0 ? (
+                {/* Incomplete runs — show at the top so user can resume */}
+                {incompleteRuns.length > 0 && (
+                    <>
+                        <Text size={200} weight="semibold" style={{ color: tokens.colorNeutralForeground2, padding: '2px 0 4px' }}>
+                            Incomplete runs
+                        </Text>
+                        {incompleteRuns.map((run) => (
+                            <div key={run.runId} className={styles.row} style={{ borderColor: tokens.colorPaletteBlueBorderActive }}>
+                                <div className={styles.rowInfo}>
+                                    <Text weight="semibold">{run.workflowSlug}</Text>
+                                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                        {run.status} · started {run.startedAt.slice(0, 10)}
+                                        {run.pausedAtStep != null ? ` · paused at step ${run.pausedAtStep + 1}` : ''}
+                                    </Text>
+                                </div>
+                                <Button
+                                    appearance="subtle"
+                                    icon={<ArrowClockwise16Regular />}
+                                    onClick={() => setReplaying({ slug: run.workflowSlug, name: run.workflowSlug })}
+                                    disabled={loading}
+                                >
+                                    Resume
+                                </Button>
+                                <Button
+                                    appearance="subtle"
+                                    icon={<Delete16Regular />}
+                                    title="Discard this incomplete run"
+                                    onClick={() => {
+                                        invoke('workflow_run_complete', { runId: run.runId, status: 'cancelled' })
+                                            .catch(() => {});
+                                        setIncompleteRuns((prev) => prev.filter((r) => r.runId !== run.runId));
+                                    }}
+                                />
+                            </div>
+                        ))}
+                        <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, margin: '4px 0 8px' }} />
+                    </>
+                )}
+
+                {list.length === 0 && incompleteRuns.length === 0 ? (
                     <div className={styles.empty}>
                         <Text>
                             No workflows recorded yet. Start a recording, ask the agent to perform a
-                            browser task, then click <strong>Stop &amp; save</strong> to capture it.
+                            browser task, then click <strong>Stop &amp; review</strong> to label and save it.
                         </Text>
                     </div>
                 ) : (
                     list.map((wf) => (
                         <div key={wf.slug} className={styles.row}>
                             <div className={styles.rowInfo}>
-                                <Text weight="semibold">{wf.name}</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <Text weight="semibold">{wf.name}</Text>
+                                    {wf.version === 2 && (
+                                        <Badge appearance="tint" color="brand" size="small">v2</Badge>
+                                    )}
+                                </div>
+                                {wf.description && (
+                                    <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+                                        {wf.description}
+                                    </Text>
+                                )}
                                 <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                                    {wf.stepCount} step{wf.stepCount === 1 ? '' : 's'} · created {wf.createdAt.slice(0, 10)}
+                                    {wf.stepCount} step{wf.stepCount === 1 ? '' : 's'}
+                                    {wf.variableCount > 0 ? ` · ${wf.variableCount} variable${wf.variableCount === 1 ? '' : 's'}` : ''}
+                                    {' · '}{wf.createdAt.slice(0, 10)}
                                 </Text>
                             </div>
                             <Button
@@ -250,7 +329,7 @@ export function WorkflowsPanel() {
                                 onClick={() => setReplaying({ slug: wf.slug, name: wf.name })}
                                 disabled={loading}
                             >
-                                Replay
+                                Run
                             </Button>
                             <Button
                                 appearance="subtle"
@@ -262,11 +341,24 @@ export function WorkflowsPanel() {
                     ))
                 )}
             </div>
+
             {replaying && (
-                <WorkflowReplayDialog
+                <WorkflowRunPanel
                     slug={replaying.slug}
                     name={replaying.name}
+                    initialVariables={replaying.variables}
+                    modelConfig={modelConfig}
                     onClose={() => setReplaying(null)}
+                />
+            )}
+
+            {pendingReview && (
+                <WorkflowRecordingReview
+                    rawSteps={pendingReview.steps}
+                    initialName={pendingReview.name}
+                    modelConfig={modelConfig ?? null}
+                    onSaved={handleReviewSaved}
+                    onCancel={() => setPendingReview(null)}
                 />
             )}
         </div>

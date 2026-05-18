@@ -321,6 +321,41 @@ Returns { url, title, data, scope }. Array results capped at 200 rows.`,
     },
 };
 
+const RUN_WORKFLOW_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'run_workflow',
+        description: `Launch a saved workflow by slug, binding variables from the conversation context.
+
+Use when the user asks to perform a task that matches a known workflow (e.g. "create a Jira ticket", "reset their Okta password", "unlock account").
+
+Step 1 — Identify available workflows:
+  Call execute_command with cmd="ls ~/.ittoolkit/workflows/" to list workflow slugs.
+
+Step 2 — Confirm with the user before starting:
+  "I'll run the '{workflow name}' workflow with these values: {variable summary}. Should I proceed?"
+
+Step 3 — Call run_workflow with the matching slug and variables inferred from conversation context.
+  The workflow panel opens automatically and handles browser automation, retries, and human approval.
+
+Step 4 — After the workflow completes, report the outcome to the user (e.g. "Ticket ITSUP-123 created").`,
+        parameters: {
+            type: 'object',
+            properties: {
+                slug: {
+                    type: 'string',
+                    description: 'Workflow slug (filename without .workflow.json). e.g. "jira-create-ticket".',
+                },
+                variables: {
+                    type: 'object',
+                    description: 'Key-value map of workflow variable values inferred from conversation context.',
+                },
+            },
+            required: ['slug'],
+        },
+    },
+};
+
 const BROWSER_TOOLS: Tool[] = [
     BROWSER_OPEN_TOOL,
     BROWSER_NAVIGATE_TOOL,
@@ -328,6 +363,7 @@ const BROWSER_TOOLS: Tool[] = [
     BROWSER_ACT_TOOL,
     BROWSER_EXTRACT_TOOL,
     BROWSER_CLOSE_TOOL,
+    RUN_WORKFLOW_TOOL,
 ];
 
 /**
@@ -878,6 +914,14 @@ USAGE PATTERN:
   4. browser_act {"session_id":"main","action":"type","index":7,"text":"…"}
   5. browser_observe {"session_id":"main"}    // confirm the change
   6. browser_close {"session_id":"main"}      // when done
+
+### run_workflow
+Launch a saved workflow (recorded automation sequence) by slug with pre-filled variables.
+Arguments: slug (string, required), variables (object, optional — variable values from conversation context).
+Returns: confirmation that the workflow panel has been opened.
+
+Use to run IT tasks like "create a Jira ticket", "unlock Okta account", "reset M365 password" when a matching workflow exists.
+List available workflows first: execute_command { cmd: "ls ~/.ittoolkit/workflows/", working_dir: "/" }
 
 ### Human-interaction detection — automatic headed upgrade
 

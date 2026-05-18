@@ -1,28 +1,32 @@
 // Workflow recorder — captures browser_rpc calls into a replayable file.
 //
-// Phase-1 RPA capability seam. browser_commands::browser_rpc consults the
-// global recorder before forwarding to the sidecar; if recording is active,
-// the call is appended. Workflows save to ~/.ittoolkit/workflows/.
+// Two schema versions coexist:
+//   v1 — raw tool call tape, no intents, no actor model (backward compat)
+//   v2 — intent-annotated, actor-aware, parameterized steps with postcondition
+//        verification and a three-tier recovery model (auto → agent → human)
 //
-// No use cases are shipped — this is the engine plus an empty UI shell.
-// Future runbooks (Okta unlock, M365 password reset) stamp out from
-// user-recorded sessions without changes here.
+// Recording flow:
+//   1. workflow_recording_start()  — begin capture
+//   2. browser_rpc calls append steps automatically
+//   3. workflow_recording_stop()   — returns raw v1 steps (no LLM yet)
+//   4. [frontend calls workflow_enrich_recording() in workflow_enricher.rs]
+//   5. workflow_recording_finalize() — saves reviewed v2 file to disk
 //
-// Trust model in M4: replays from chat re-use the existing
-// onConfirmExecution flow per step. Replays from the UI auto-approve all
-// steps but surface a yellow warning. A proper admin-signed workflow flow
-// arrives with M5+.
+// Workflows save to ~/.ittoolkit/workflows/*.workflow.json
+// Run checkpoints save to ~/.ittoolkit/workflow-runs/*.run.json
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::command;
+use tauri::{command, AppHandle, Manager};
 use tokio::fs;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 const WORKFLOWS_DIR: &str = ".ittoolkit/workflows";
+const WORKFLOW_RUNS_DIR: &str = ".ittoolkit/workflow-runs";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,9 +73,133 @@ pub struct WorkflowParameter {
 pub struct WorkflowSummary {
     pub name: String,
     pub slug: String,
+    pub description: Option<String>,
     pub created_at: String,
     pub step_count: usize,
+    pub variable_count: usize,
+    pub version: u32,
     pub path: String,
+}
+
+// ── v2 schema ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Postcondition {
+    pub r#type: String, // "url_pattern" | "selector_exists" | "text_contains" | "variable_extracted" | "none"
+    pub value: String,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicy {
+    pub max_auto: u32,
+    pub escalate_to: String, // "agent" | "human" | "abort"
+    pub agent_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanInput {
+    pub name: String,
+    pub label: String,
+    pub r#type: String, // "text" | "password" | "select" | "checkbox"
+    pub options: Option<Vec<String>>,
+    pub required: bool,
+    pub sensitive: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProducesSpec {
+    pub from: String, // "url_regex" | "ax_selector" | "page_title"
+    pub pattern: String,
+    pub group: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStepV2 {
+    pub id: String,
+    pub intent: String,
+    pub tool: String,
+    pub params: Value,
+    pub actor: String, // "auto" | "agent" | "human"
+    pub human_prompt: Option<String>,
+    pub human_inputs: Option<Vec<HumanInput>>,
+    pub requires_variables: Option<Vec<String>>,
+    pub produces_variable: Option<String>,
+    pub produces_from: Option<ProducesSpec>,
+    pub postcondition: Option<Postcondition>,
+    pub retry: RetryPolicy,
+    // v1 compat
+    pub classification: String,
+    pub observed_url: Option<String>,
+    pub observed_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowVariable {
+    pub name: String,
+    pub r#type: String, // "string" | "number" | "boolean"
+    pub source: String, // "human_input" | "conversation_context" | "literal" | "step_output"
+    pub default_value: Option<String>,
+    pub description: String,
+    pub sensitive: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowFileV2 {
+    pub version: u32, // always 2
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub goal: String,
+    pub created_at: String,
+    pub model_used: Option<String>,
+    pub variables: Vec<WorkflowVariable>,
+    pub steps: Vec<WorkflowStepV2>,
+}
+
+// ── Run checkpoint ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepAttempt {
+    pub n: u32,
+    pub actor: String,
+    pub started_at: String,
+    pub error: Option<String>,
+    pub screenshot_b64: Option<String>,
+    pub agent_reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStepRun {
+    pub step_id: String,
+    pub status: String,
+    pub attempts: Vec<StepAttempt>,
+    pub resolved_inputs: Value,
+    pub output_value: Option<Value>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRun {
+    pub run_id: String,
+    pub workflow_slug: String,
+    pub started_at: String,
+    pub status: String, // "running" | "paused" | "completed" | "failed" | "cancelled"
+    pub resolved_vars: Value,
+    pub step_runs: Vec<WorkflowStepRun>,
+    pub paused_at_step: Option<usize>,
+    pub pause_reason: Option<String>,
 }
 
 struct ActiveRecording {
@@ -215,29 +343,182 @@ pub async fn workflow_list() -> Result<Vec<WorkflowSummary>, String> {
             continue;
         }
         let body = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
-        let Ok(file) = serde_json::from_str::<WorkflowFile>(&body) else {
-            continue;
+        // Try v2 first, fall back to v1.
+        let summary = if let Ok(v2) = serde_json::from_str::<WorkflowFileV2>(&body) {
+            WorkflowSummary {
+                name: v2.name,
+                slug: v2.slug,
+                description: Some(v2.description),
+                created_at: v2.created_at,
+                step_count: v2.steps.len(),
+                variable_count: v2.variables.len(),
+                version: 2,
+                path: path.to_string_lossy().to_string(),
+            }
+        } else if let Ok(v1) = serde_json::from_str::<WorkflowFile>(&body) {
+            WorkflowSummary {
+                name: v1.name,
+                slug: v1.slug,
+                description: None,
+                created_at: v1.created_at,
+                step_count: v1.steps.len(),
+                variable_count: v1.parameters.len(),
+                version: 1,
+                path: path.to_string_lossy().to_string(),
+            }
+        } else {
+            continue; // malformed — skip silently
         };
-        out.push(WorkflowSummary {
-            name: file.name,
-            slug: file.slug,
-            created_at: file.created_at,
-            step_count: file.steps.len(),
-            path: path.to_string_lossy().to_string(),
-        });
+        out.push(summary);
     }
     out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(out)
 }
 
+/// Save a reviewed v2 workflow definition to disk.
+/// Called by the WorkflowRecordingReview UI after the user has confirmed
+/// intents, actor classifications, and variable declarations.
 #[command]
-pub async fn workflow_load(slug: String) -> Result<WorkflowFile, String> {
+pub async fn workflow_recording_finalize(
+    definition: WorkflowFileV2,
+) -> Result<WorkflowFileV2, String> {
+    let dir = workflows_dir()?;
+    fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let mut path = dir.join(format!("{}.workflow.json", definition.slug));
+    let mut suffix = 2u32;
+    while path.exists() {
+        path = dir.join(format!("{}-{}.workflow.json", definition.slug, suffix));
+        suffix += 1;
+        if suffix > 99 {
+            return Err("too many workflows with the same slug".to_string());
+        }
+    }
+    let serialized = serde_json::to_string_pretty(&definition).map_err(|e| e.to_string())?;
+    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    Ok(definition)
+}
+
+// ── Run checkpoint commands ───────────────────────────────────────────────────
+
+fn runs_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
+    Ok(home.join(WORKFLOW_RUNS_DIR))
+}
+
+/// Create a new run record and persist it. Called at the start of every replay.
+#[command]
+pub async fn workflow_run_create(
+    workflow_slug: String,
+    resolved_vars: Value,
+    step_count: usize,
+) -> Result<WorkflowRun, String> {
+    let run = WorkflowRun {
+        run_id: Uuid::new_v4().to_string(),
+        workflow_slug,
+        started_at: Utc::now().to_rfc3339(),
+        status: "running".to_string(),
+        resolved_vars,
+        step_runs: (0..step_count)
+            .map(|i| WorkflowStepRun {
+                step_id: i.to_string(),
+                status: "pending".to_string(),
+                attempts: Vec::new(),
+                resolved_inputs: Value::Object(serde_json::Map::new()),
+                output_value: None,
+                started_at: None,
+                completed_at: None,
+            })
+            .collect(),
+        paused_at_step: None,
+        pause_reason: None,
+    };
+    let dir = runs_dir()?;
+    fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.run.json", run.run_id));
+    let serialized = serde_json::to_string_pretty(&run).map_err(|e| e.to_string())?;
+    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    Ok(run)
+}
+
+/// Checkpoint one step's runtime state. Called after every step transition.
+#[command]
+pub async fn workflow_run_checkpoint(
+    run_id: String,
+    step_index: usize,
+    step_run: WorkflowStepRun,
+    paused_at_step: Option<usize>,
+    pause_reason: Option<String>,
+) -> Result<(), String> {
+    let dir = runs_dir()?;
+    let path = dir.join(format!("{}.run.json", run_id));
+    let body = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
+    let mut run: WorkflowRun = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    if step_index < run.step_runs.len() {
+        run.step_runs[step_index] = step_run;
+    }
+    run.paused_at_step = paused_at_step;
+    run.pause_reason = pause_reason;
+    let serialized = serde_json::to_string_pretty(&run).map_err(|e| e.to_string())?;
+    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Mark a run as completed/failed/cancelled and persist final status.
+#[command]
+pub async fn workflow_run_complete(run_id: String, status: String) -> Result<(), String> {
+    let dir = runs_dir()?;
+    let path = dir.join(format!("{}.run.json", run_id));
+    if !path.exists() {
+        return Ok(());
+    }
+    let body = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
+    let mut run: WorkflowRun = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    run.status = status;
+    let serialized = serde_json::to_string_pretty(&run).map_err(|e| e.to_string())?;
+    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// List all runs that are in "running" or "paused" state (incomplete).
+/// Called on app startup to surface resumable runs in the UI.
+#[command]
+pub async fn workflow_run_list_incomplete() -> Result<Vec<WorkflowRun>, String> {
+    let dir = runs_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut read_dir = fs::read_dir(&dir).await.map_err(|e| e.to_string())?;
+    while let Some(entry) = read_dir.next_entry().await.map_err(|e| e.to_string())? {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let body = match fs::read_to_string(&path).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let Ok(run) = serde_json::from_str::<WorkflowRun>(&body) else {
+            continue;
+        };
+        if run.status == "running" || run.status == "paused" {
+            out.push(run);
+        }
+    }
+    out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    Ok(out)
+}
+
+#[command]
+pub async fn workflow_load(slug: String) -> Result<serde_json::Value, String> {
     let dir = workflows_dir()?;
     let path = dir.join(format!("{}.workflow.json", slug));
     if !path.exists() {
         return Err(format!("workflow not found: {}", slug));
     }
     let body = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
+    // Return raw JSON so both v1 and v2 files pass through verbatim.
+    // The TypeScript side uses the `version` field to dispatch (isV2 guard).
     serde_json::from_str(&body).map_err(|e| e.to_string())
 }
 
@@ -269,10 +550,20 @@ pub struct ReplayEvent {
 fn bind_params(value: &Value, params: &serde_json::Map<String, Value>) -> Value {
     match value {
         Value::String(s) => {
-            // Replace `{{ name }}` (with optional whitespace) with the
-            // corresponding parameter's string form. Leaves unknown names
-            // alone so the step's natural failure mode (e.g. blank input)
-            // surfaces to the user instead of a silent miss.
+            // Replace `{{ name }}` (with optional whitespace) with the bound
+            // parameter value. If the entire string is exactly `{{ name }}`
+            // (possibly with spaces), we preserve the parameter's native type
+            // (bool, number) instead of stringifying — this prevents browser.open's
+            // `headed: true` from arriving as the string "true" which the sidecar
+            // would not accept as a boolean.
+            for (k, v) in params {
+                let needle_a = format!("{{{{ {} }}}}", k);
+                let needle_b = format!("{{{{{}}}}}", k);
+                if s.trim() == needle_a.trim() || s.trim() == needle_b.trim() {
+                    return v.clone(); // preserve native type
+                }
+            }
+            // Partial substitution: replacement is always a string form.
             let mut out = s.clone();
             for (k, v) in params {
                 let needle_a = format!("{{{{ {} }}}}", k);
@@ -314,18 +605,80 @@ pub async fn workflow_replay_bind(
         return Err(format!("workflow not found: {}", slug));
     }
     let body = fs::read_to_string(&path).await.map_err(|e| e.to_string())?;
-    let file: WorkflowFile = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    Ok(file
-        .steps
-        .into_iter()
-        .map(|step| WorkflowStep {
-            tool: step.tool,
-            params: bind_params(&step.params, &parameters),
-            classification: step.classification,
-            observed_url: step.observed_url,
-            observed_title: step.observed_title,
+    // Try v1 struct first; fall back to raw JSON step extraction for v2 files.
+    if let Ok(file) = serde_json::from_str::<WorkflowFile>(&body) {
+        return Ok(file
+            .steps
+            .into_iter()
+            .map(|step| WorkflowStep {
+                tool: step.tool,
+                params: bind_params(&step.params, &parameters),
+                classification: step.classification,
+                observed_url: step.observed_url,
+                observed_title: step.observed_title,
+            })
+            .collect());
+    }
+    // v2 file — extract steps from raw JSON
+    let raw: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let steps = raw["steps"].as_array().ok_or("v2 workflow missing steps array")?;
+    Ok(steps
+        .iter()
+        .filter_map(|s| {
+            Some(WorkflowStep {
+                tool: s["tool"].as_str()?.to_string(),
+                params: bind_params(&s["params"], &parameters),
+                classification: s["classification"].as_str().unwrap_or("read").to_string(),
+                observed_url: s["observedUrl"].as_str().map(String::from),
+                observed_title: s["observedTitle"].as_str().map(String::from),
+            })
         })
         .collect())
+}
+
+/// Seed bundled canonical workflows to `~/.ittoolkit/workflows/` on first run.
+/// Uses merge-only semantics: if the destination file already exists (user edited
+/// or re-recorded it), we skip it — we never overwrite user work.
+pub fn seed_default_workflows(app: &AppHandle) -> Result<(), String> {
+    use tauri::path::BaseDirectory;
+    let dst_dir = workflows_dir()?;
+    let src_dir = app
+        .path()
+        .resolve("resources/default-workflows", BaseDirectory::Resource)
+        .or_else(|_| {
+            app.path()
+                .resolve("default-workflows", BaseDirectory::Resource)
+        })
+        .map_err(|e| format!("Failed to resolve default-workflows resource: {}", e))?;
+
+    if !src_dir.exists() {
+        log::warn!("Default workflows resource dir not found at {:?}", src_dir);
+        return Ok(());
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&dst_dir) {
+        return Err(format!("Failed to create workflows dir: {}", e));
+    }
+
+    let entries = std::fs::read_dir(&src_dir)
+        .map_err(|e| format!("Failed to read default-workflows dir: {}", e))?;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.extension().map_or(false, |ext| ext == "json") {
+            continue;
+        }
+        let dst = dst_dir.join(entry.file_name());
+        if dst.exists() {
+            // Never overwrite — preserve user-recorded or user-edited workflows.
+            continue;
+        }
+        if let Err(e) = std::fs::copy(&src, &dst) {
+            log::warn!("Failed to seed workflow {:?}: {}", src.file_name().unwrap_or_default(), e);
+        } else {
+            log::debug!("Seeded default workflow: {:?}", dst.file_name().unwrap_or_default());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -356,5 +709,37 @@ mod tests {
         let mut params = serde_json::Map::new();
         params.insert("name".to_string(), Value::String("ittk".to_string()));
         assert_eq!(bind_params(&template, &params), Value::String("ittk-suffix".to_string()));
+    }
+
+    #[test]
+    fn bind_params_preserves_bool_native_type() {
+        // A string that is EXACTLY `{{ headed }}` should resolve to the bool
+        // Value, not the string "true". browser.open's `headed` flag is a
+        // boolean; arriving as "true" would fail the sidecar's type check.
+        let template = json!({ "headed": "{{ headed }}", "session_id": "s1" });
+        let mut params = serde_json::Map::new();
+        params.insert("headed".to_string(), Value::Bool(true));
+        let bound = bind_params(&template, &params);
+        assert_eq!(bound["headed"], Value::Bool(true));
+        assert_eq!(bound["session_id"], json!("s1")); // untouched
+    }
+
+    #[test]
+    fn bind_params_preserves_number_native_type() {
+        let template = json!({ "timeout": "{{ timeout_ms }}" });
+        let mut params = serde_json::Map::new();
+        params.insert("timeout_ms".to_string(), json!(5000));
+        let bound = bind_params(&template, &params);
+        assert_eq!(bound["timeout"], json!(5000));
+    }
+
+    #[test]
+    fn bind_params_partial_string_still_stringifies() {
+        // If the template has MORE text around the placeholder, we must
+        // stringify even for bool/number — there's no other sensible result.
+        let template = json!("prefix-{{ flag }}-suffix");
+        let mut params = serde_json::Map::new();
+        params.insert("flag".to_string(), Value::Bool(true));
+        assert_eq!(bind_params(&template, &params), Value::String("prefix-true-suffix".to_string()));
     }
 }

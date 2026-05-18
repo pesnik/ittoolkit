@@ -33,6 +33,9 @@ pub fn run() {
       if let Err(e) = skills::seed_default_skills(&app.handle()) {
         log::warn!("Failed to seed default skills: {}", e);
       }
+      if let Err(e) = workflow_recorder::seed_default_workflows(&app.handle()) {
+        log::warn!("Failed to seed default workflows: {}", e);
+      }
       Ok(())
     })
     .manage(ai_commands::InferenceState::default())
@@ -118,14 +121,20 @@ pub fn run() {
         // Browser-use harness (M1: read-only RPC to Playwright sidecar)
         browser_commands::browser_rpc,
         browser_commands::browser_shutdown,
-        // Workflow capability (M4: recorder + replay; no use cases shipped)
+        // Workflow capability
         workflow_recorder::workflow_recording_start,
         workflow_recorder::workflow_recording_stop,
         workflow_recorder::workflow_recording_status,
+        workflow_recorder::workflow_recording_finalize,
         workflow_recorder::workflow_list,
         workflow_recorder::workflow_load,
         workflow_recorder::workflow_delete,
         workflow_recorder::workflow_replay_bind,
+        // Workflow run checkpoints (durable execution state)
+        workflow_recorder::workflow_run_create,
+        workflow_recorder::workflow_run_checkpoint,
+        workflow_recorder::workflow_run_complete,
+        workflow_recorder::workflow_run_list_incomplete,
         // Browser capability gate (M5: per-skill URL allowlist)
         browser_capability::browser_set_capabilities,
         browser_capability::browser_clear_capabilities,

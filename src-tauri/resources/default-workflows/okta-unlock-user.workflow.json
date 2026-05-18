@@ -1,0 +1,161 @@
+{
+  "version": 2,
+  "name": "Okta \u2014 Unlock User Account",
+  "slug": "okta-unlock-user",
+  "description": "Unlocks a locked-out Okta user account. The agent navigates to the Okta admin console, finds the user, and unlocks their account.",
+  "goal": "Target user's Okta account unlocked and status changed from 'Locked Out' to 'Active'.",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "modelUsed": null,
+  "variables": [
+    {
+      "name": "okta_domain",
+      "type": "string",
+      "source": "human_input",
+      "description": "Your Okta domain, e.g. company.okta.com",
+      "defaultValue": ""
+    },
+    {
+      "name": "user_email",
+      "type": "string",
+      "source": "conversation_context",
+      "description": "Email address of the user to unlock (inferred from conversation)",
+      "defaultValue": ""
+    }
+  ],
+  "steps": [
+    {
+      "id": "step-open-okta",
+      "intent": "Open a browser session for okta",
+      "tool": "browser.open",
+      "params": {
+        "session_id": "okta",
+        "profile": "persistent"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human"
+      }
+    },
+    {
+      "id": "step-navigate-okta-users",
+      "intent": "Navigate to the Okta admin users list",
+      "tool": "browser.navigate",
+      "params": {
+        "session_id": "okta",
+        "url": "https://{{ okta_domain }}/admin/users"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human"
+      },
+      "postcondition": {
+        "type": "url_pattern",
+        "value": "/admin/",
+        "timeoutMs": 20000
+      }
+    },
+    {
+      "id": "step-observe-login",
+      "intent": "Observe the Okta page (detect if login is required)",
+      "tool": "browser.observe",
+      "params": {
+        "session_id": "okta"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 1,
+        "escalateTo": "agent",
+        "agentHint": "If a login page is shown (URL contains /login, password field visible), upgrade to headed mode: browser_open with headed=true and profile=persistent. Tell the user to log in to Okta admin, then wait."
+      }
+    },
+    {
+      "id": "step-search-user",
+      "intent": "Search for the user by email address",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "okta",
+        "action": "type",
+        "index": 0,
+        "text": "{{ user_email }}",
+        "submit": true
+      },
+      "actor": "agent",
+      "classification": "write",
+      "requiresVariables": [
+        "user_email"
+      ],
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent",
+        "agentHint": "Find the search input field. In Okta Classic it has data-se='search-input' or placeholder contains 'Search'. Type the email and press Enter."
+      }
+    },
+    {
+      "id": "step-click-user",
+      "intent": "Click on the user in the search results to open their profile",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "okta",
+        "action": "click",
+        "index": 0
+      },
+      "actor": "agent",
+      "classification": "read",
+      "requiresVariables": [
+        "user_email"
+      ],
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human",
+        "agentHint": "Find the user row in the search results. Click the user's name or email link. The profile page URL should contain /admin/user/..."
+      },
+      "postcondition": {
+        "type": "url_pattern",
+        "value": "/admin/user/",
+        "timeoutMs": 10000
+      }
+    },
+    {
+      "id": "step-unlock-user",
+      "intent": "Click the Unlock button to unlock the user's account",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "okta",
+        "action": "click",
+        "index": 0
+      },
+      "actor": "agent",
+      "classification": "write",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human",
+        "agentHint": "Look for an 'Unlock' button or link on the user profile page, or in the 'More Actions' dropdown menu. The user status should show 'Locked Out'. Click 'Unlock' and confirm any dialog."
+      },
+      "postcondition": {
+        "type": "text_contains",
+        "value": "Active",
+        "timeoutMs": 8000
+      }
+    },
+    {
+      "id": "step-verify-active",
+      "intent": "Verify the user status is now Active",
+      "tool": "browser.observe",
+      "params": {
+        "session_id": "okta"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "producesVariable": "unlock_confirmed",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent"
+      }
+    }
+  ]
+}

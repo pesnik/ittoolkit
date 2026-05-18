@@ -133,6 +133,60 @@ const PROFILES: SiteProfile[] = [
         ],
         axMaxElements: 60,
     },
+    {
+        name: 'Microsoft 365 Admin',
+        hostPatterns: ['admin.microsoft.com'],
+        waitForIdle: true,
+        readySelector: '[data-automationid="AdminApp"], [data-bi-area="MicrosoftAdminCenter"]',
+        readyTimeout: 25_000,
+        locatorStrategies: [
+            { selector: '[data-automationid="{name}"]' },
+            { selector: '[aria-label="{name}"]' },
+            { selector: '[data-aut-id="{name}"]' },
+        ],
+        dismissSelectors: ['[aria-label="Close"]', '[data-testid="cookie-banner-accept"]'],
+        preActDelayMs: 200,
+    },
+    {
+        name: 'Okta Admin',
+        hostPatterns: ['*.okta.com', '*.okta-gov.com', '*.oktapreview.com'],
+        waitForIdle: true,
+        readySelector: '#header, .sidenav, [data-se="o-header"]',
+        readyTimeout: 20_000,
+        locatorStrategies: [
+            { selector: '[data-se="{name}"]' },
+            { selector: '[aria-label="{name}"]' },
+            { selector: '[data-testid="{name}"]' },
+        ],
+        preActDelayMs: 150,
+    },
+    {
+        name: 'Jira / Confluence',
+        hostPatterns: ['*.atlassian.net'],
+        waitForIdle: true,
+        readySelector: '[data-testid="navigation-container"], #atlassian-navigation',
+        readyTimeout: 20_000,
+        locatorStrategies: [
+            { selector: '[data-testid="{name}"]' },
+            { selector: '[aria-label="{name}"]' },
+            { selector: '[data-ds--text-field--input="{name}"]' },
+        ],
+        preActDelayMs: 150,
+    },
+    {
+        name: 'ServiceNow',
+        hostPatterns: ['*.service-now.com'],
+        waitForIdle: true,
+        readySelector: '.navpage-main, [id="gsft_main"]',
+        readyTimeout: 30_000,
+        locatorStrategies: [
+            { selector: '[aria-label="{name}"]' },
+            { selector: 'label:has-text("{name}") + input, label:has-text("{name}") + select' },
+            { selector: '[name="{name}"]' },
+        ],
+        dismissSelectors: ['[aria-label="Close dialog"]'],
+        preActDelayMs: 300,
+    },
 ];
 
 // ---------------------------------------------------------------------------

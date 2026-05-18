@@ -1,0 +1,215 @@
+{
+  "version": 2,
+  "name": "Create Jira IT Support Ticket",
+  "slug": "jira-create-ticket",
+  "description": "Creates a Jira service desk ticket from conversation context. The agent fills the summary, description, and priority from what the user has described; the user reviews before submitting.",
+  "goal": "IT support ticket created in Jira with the issue details from the conversation, ticket ID reported back to the user.",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "modelUsed": null,
+  "variables": [
+    {
+      "name": "jira_base_url",
+      "type": "string",
+      "source": "human_input",
+      "description": "Your Jira base URL, e.g. https://company.atlassian.net",
+      "defaultValue": ""
+    },
+    {
+      "name": "summary",
+      "type": "string",
+      "source": "conversation_context",
+      "description": "One-line summary of the issue (inferred from conversation)",
+      "defaultValue": ""
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "source": "conversation_context",
+      "description": "Detailed description of the problem (inferred from conversation)",
+      "defaultValue": ""
+    },
+    {
+      "name": "priority",
+      "type": "string",
+      "source": "conversation_context",
+      "description": "Priority level: Highest, High, Medium, Low, Lowest",
+      "defaultValue": "Medium"
+    }
+  ],
+  "steps": [
+    {
+      "id": "step-open-jira",
+      "intent": "Open a browser session for jira",
+      "tool": "browser.open",
+      "params": {
+        "session_id": "jira",
+        "profile": "persistent"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human"
+      }
+    },
+    {
+      "id": "step-navigate-jira",
+      "intent": "Navigate to the Jira service desk",
+      "tool": "browser.navigate",
+      "params": {
+        "session_id": "jira",
+        "url": "{{ jira_base_url }}/jira/servicedesk/"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human"
+      },
+      "postcondition": {
+        "type": "url_pattern",
+        "value": "/jira/",
+        "timeoutMs": 20000
+      }
+    },
+    {
+      "id": "step-observe-page",
+      "intent": "Observe the Jira page to find the Create button",
+      "tool": "browser.observe",
+      "params": {
+        "session_id": "jira"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent",
+        "agentHint": "If the page requires login, switch to headed mode and ask the user to sign in."
+      }
+    },
+    {
+      "id": "step-click-create",
+      "intent": "Click the Create Issue button to open the ticket form",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "jira",
+        "action": "click",
+        "index": 0
+      },
+      "actor": "agent",
+      "classification": "write",
+      "requiresVariables": [],
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent",
+        "agentHint": "Look for a button or link with text 'Create', 'Raise a request', or 'New issue'. Try keyboard shortcut 'c' if click fails."
+      },
+      "postcondition": {
+        "type": "selector_exists",
+        "value": "#summary, [data-testid*='summary'], [placeholder*='summary' i]",
+        "timeoutMs": 8000
+      }
+    },
+    {
+      "id": "step-fill-summary",
+      "intent": "Fill the issue summary with the problem description from context",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "jira",
+        "action": "type",
+        "index": 0,
+        "text": "{{ summary }}"
+      },
+      "actor": "agent",
+      "classification": "write",
+      "requiresVariables": [
+        "summary"
+      ],
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent",
+        "agentHint": "Find the Summary text field (usually the first text input in the create dialog). Use browser_observe to find its index."
+      }
+    },
+    {
+      "id": "step-fill-description",
+      "intent": "Fill the description with the full issue details",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "jira",
+        "action": "type",
+        "index": 0,
+        "text": "{{ description }}"
+      },
+      "actor": "agent",
+      "classification": "write",
+      "requiresVariables": [
+        "description"
+      ],
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent",
+        "agentHint": "The description editor may be a ProseMirror contenteditable. Find it below the Summary field."
+      }
+    },
+    {
+      "id": "step-human-review",
+      "intent": "Human reviews the ticket before submission",
+      "tool": "browser.observe",
+      "params": {
+        "session_id": "jira"
+      },
+      "actor": "human",
+      "humanPrompt": "Please review the ticket details above. The Summary and Description have been filled in from your conversation. You can edit the fields directly in the browser, then click Continue to submit.",
+      "humanInputs": [],
+      "classification": "read",
+      "retry": {
+        "maxAuto": 0,
+        "escalateTo": "human"
+      }
+    },
+    {
+      "id": "step-submit",
+      "intent": "Submit the ticket by clicking Create or Submit",
+      "tool": "browser.act",
+      "params": {
+        "session_id": "jira",
+        "action": "click",
+        "index": 0,
+        "submit": true
+      },
+      "actor": "agent",
+      "classification": "write",
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "human",
+        "agentHint": "Find the final Create or Submit button in the ticket form. It may be labeled 'Create', 'Submit', 'Raise request'."
+      },
+      "postcondition": {
+        "type": "url_pattern",
+        "value": "/browse/|/servicedesk/customer/",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "id": "step-extract-ticket-id",
+      "intent": "Extract the created ticket ID from the URL or page",
+      "tool": "browser.observe",
+      "params": {
+        "session_id": "jira"
+      },
+      "actor": "auto",
+      "classification": "read",
+      "producesVariable": "ticket_id",
+      "producesFrom": {
+        "from": "url_regex",
+        "pattern": "/browse/([A-Z]+-[0-9]+)",
+        "group": 1
+      },
+      "retry": {
+        "maxAuto": 2,
+        "escalateTo": "agent"
+      }
+    }
+  ]
+}
