@@ -219,9 +219,10 @@ function initialPosition(): { x: number; y: number } {
 export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const styles = useStyles();
 
-    // --- position / drag ---
+    // --- position / drag / focus ---
     const [pos, setPos] = useState(initialPosition);
-    const [minimized, setMinimized] = useState(true);
+    const [minimized, setMinimized] = useState(false);
+    const [hovered, setHovered] = useState(false);
     const dragRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
     const [dragging, setDragging] = useState(false);
 
@@ -338,7 +339,6 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
         if (!workflow) return;
         setRunning(true);
         setActive(true);
-        setMinimized(false);
         setError(null);
         window.dispatchEvent(new CustomEvent('workflow-replay-started'));
         try {
@@ -378,7 +378,14 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const panel = (
         <div
             className={styles.panel}
-            style={{ left: pos.x, top: pos.y }}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            style={{
+                left: pos.x,
+                top: pos.y,
+                opacity: hovered ? 0.9 : 0.5,
+                transition: 'opacity 0.2s ease',
+            }}
         >
             {/* ── Title bar / drag handle ── */}
             <div
