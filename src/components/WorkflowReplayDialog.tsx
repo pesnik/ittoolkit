@@ -211,8 +211,8 @@ function applyReplayOverrides(steps: WorkflowStep[]): WorkflowStep[] {
 function initialPosition(): { x: number; y: number } {
     if (typeof window === 'undefined') return { x: 80, y: 80 };
     return {
-        x: Math.max(16, window.innerWidth - PANEL_WIDTH - 32),
-        y: 80,
+        x: Math.round((window.innerWidth - PANEL_WIDTH) / 2),
+        y: Math.round(window.innerHeight * 0.4),
     };
 }
 
@@ -260,6 +260,7 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const [boundSteps, setBoundSteps] = useState<WorkflowStep[]>([]);
     const [stepStates, setStepStates] = useState<StepRuntimeState[]>([]);
     const [running, setRunning] = useState(false);
+    const [active, setActive] = useState(false); // becomes true on first Run — drives opacity
     const [error, setError] = useState<string | null>(null);
     const [latestScreenshot, setLatestScreenshot] = useState<string | undefined>();
     const [latestUrl, setLatestUrl] = useState<string | undefined>();
@@ -336,6 +337,7 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const run = useCallback(async () => {
         if (!workflow) return;
         setRunning(true);
+        setActive(true);
         setError(null);
         window.dispatchEvent(new CustomEvent('workflow-replay-started'));
         try {
@@ -375,7 +377,12 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const panel = (
         <div
             className={styles.panel}
-            style={{ left: pos.x, top: pos.y }}
+            style={{
+                left: pos.x,
+                top: pos.y,
+                opacity: active ? 1 : 0.55,
+                transition: 'opacity 0.3s ease',
+            }}
         >
             {/* ── Title bar / drag handle ── */}
             <div
