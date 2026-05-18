@@ -148,7 +148,9 @@ const BROWSER_OPEN_TOOL: Tool = {
     type: 'function',
     function: {
         name: 'browser_open',
-        description: `Open (or attach to) a browser session. Returns the session_id you'll pass to subsequent browser_* calls. Sessions persist until browser_close. Use a deterministic session_id ("main", "okta", "m365") so subsequent turns can reuse the same tab.`,
+        description: `Open (or attach to) a browser session. Returns the session_id you'll pass to subsequent browser_* calls. Sessions persist until browser_close. Use a deterministic session_id ("main", "okta", "m365") so subsequent turns can reuse the same tab.
+
+HEADED UPGRADE: If you call browser_open with headed=true on a session that is already open headlessly, the session is seamlessly promoted to a visible window — all cookies and current URL are preserved automatically. You do NOT need to close the session first. This is the correct way to handle mid-flow login detection.`,
         parameters: {
             type: 'object',
             properties: {
@@ -159,7 +161,7 @@ const BROWSER_OPEN_TOOL: Tool = {
                 profile: {
                     type: 'string',
                     enum: ['ephemeral', 'persistent'],
-                    description: 'ephemeral (default): fresh profile, no cookies survive. persistent: keep cookies/SSO between runs.',
+                    description: 'ephemeral (default): fresh profile, no cookies survive beyond this session. persistent: cookies and localStorage survive browser_close and are reloaded on the next browser_open with the same session_id — use this for SSO/login flows so the user only needs to authenticate once.',
                 },
                 viewport: {
                     type: 'object',
@@ -171,7 +173,7 @@ const BROWSER_OPEN_TOOL: Tool = {
                 },
                 headed: {
                     type: 'boolean',
-                    description: 'false (default): headless, no visible browser window. true: open a visible browser window so you or the user can see what is happening. Use headed=true for login flows, CAPTCHAs, or any interaction where the user needs to see or intervene.',
+                    description: 'false (default): headless, no visible window. true: open a visible Chromium window. Use headed=true whenever human interaction is needed: SSO login, password entry, CAPTCHA, MFA/2FA, or any page that blocks headless browsers ("JavaScript required"). Calling with headed=true on an existing headless session upgrades it in-place — cookies preserved.',
                 },
             },
             required: ['session_id'],
@@ -849,7 +851,22 @@ USAGE PATTERN:
   3. browser_observe {"session_id":"main"}    // see the page; note element indices and tags
   4. browser_act {"session_id":"main","action":"type","index":7,"text":"…"}
   5. browser_observe {"session_id":"main"}    // confirm the change
-  6. browser_close {"session_id":"main"}      // when done` : ''}`;
+  6. browser_close {"session_id":"main"}      // when done
+
+### Human-interaction detection — automatic headed upgrade
+
+Detect these signals from browser_observe results and IMMEDIATELY switch to headed mode:
+- URL contains: /login, /signin, /sso, /auth, /saml, /oauth, adfs., okta., microsoftonline.com, ping., onelogin.
+- AX tree shows a password textbox (tags includes "password")
+- Page title or heading contains: "sign in", "log in", "javascript required", "authenticate", "captcha"
+- Page content indicates bot/automation detection ("JavaScript is required", "browser not supported")
+
+When ANY of these signals are detected, take these steps IN ORDER — do not skip any:
+1. Call browser_open with the SAME session_id, headed=true, and profile="persistent". This upgrades the session in-place; cookies and the current URL are preserved automatically.
+2. Tell the user exactly: "I've opened a browser window for you to complete the login/verification. Please sign in and then tell me to continue."
+3. STOP — do not call any more browser tools. Wait for the user to explicitly say they have completed the interaction before proceeding.
+
+Do NOT try to type passwords or click submit on login forms. Do NOT loop calling browser_observe to poll for completion. Wait for the user.` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

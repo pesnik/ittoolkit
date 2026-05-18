@@ -402,6 +402,11 @@ async function executeBrowserTool(
                 ` (now at ${r?.url ?? '(unknown url)'}).`;
         } else if (toolName === 'browser_open') {
             summary = `Opened browser session "${(result as any)?.session_id ?? sessionId}".`;
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('browser-session-opened', {
+                    detail: { sessionId: (result as any)?.session_id ?? sessionId },
+                }));
+            }
         } else if (toolName === 'browser_close') {
             summary = `Closed browser session "${sessionId}".`;
         } else if (toolName === 'browser_extract') {
@@ -732,8 +737,10 @@ export async function runInferenceWithTools(
         }
 
         let toolCalls: any[] = [];
+        let isNativeFunctionCalling = false;
 
         if (response.message.toolCalls && response.message.toolCalls.length > 0) {
+            isNativeFunctionCalling = true;
             console.log(
                 '[inference-with-tools] Native toolCalls received:',
                 response.message.toolCalls.map((tc: any) => ({
@@ -877,12 +884,20 @@ export async function runInferenceWithTools(
                             });
                         }
 
-                        toolResults.push({
-                            id: `tool-cancelled-${Date.now()}-${toolCall.id}`,
-                            role: MessageRole.User,
-                            content: formatToolResult(toolCall.name, 'Cancelled by user', false),
-                            timestamp: Date.now(),
-                        });
+                        toolResults.push(isNativeFunctionCalling
+                            ? {
+                                id: `tool-cancelled-${Date.now()}-${toolCall.id}`,
+                                role: MessageRole.Tool,
+                                content: 'Cancelled by user',
+                                timestamp: Date.now(),
+                                toolCallId: toolCall.id,
+                            }
+                            : {
+                                id: `tool-cancelled-${Date.now()}-${toolCall.id}`,
+                                role: MessageRole.User,
+                                content: formatToolResult(toolCall.name, 'Cancelled by user', false),
+                                timestamp: Date.now(),
+                            });
                         continue;
                     }
                 }
@@ -930,13 +945,27 @@ export async function runInferenceWithTools(
                     });
                 }
 
-                const toolResultMessage: ChatMessage = {
-                    id: `tool-result-${Date.now()}-${toolCall.id}`,
-                    role: MessageRole.User,
-                    content: formatToolResult(toolCall.name, result.content, result.isError),
-                    timestamp: Date.now(),
-                    images: result.images,
-                };
+                // Native function calling: the API requires role="tool" with
+                // tool_call_id matching the preceding assistant tool_call id.
+                // XML-based calling: role="user" with <tool_result> wrapper so
+                // the model finds results in its context the usual way.
+                const toolResultMessage: ChatMessage = isNativeFunctionCalling
+                    ? {
+                        id: `tool-result-${Date.now()}-${toolCall.id}`,
+                        role: MessageRole.Tool,
+                        content: result.content,
+                        timestamp: Date.now(),
+                        toolCallId: toolCall.id,
+                        // OpenAI tool messages require string content — images
+                        // are delivered separately via the BrowserView screencast.
+                    }
+                    : {
+                        id: `tool-result-${Date.now()}-${toolCall.id}`,
+                        role: MessageRole.User,
+                        content: formatToolResult(toolCall.name, result.content, result.isError),
+                        timestamp: Date.now(),
+                        images: result.images,
+                    };
 
                 toolResults.push(toolResultMessage);
             } catch (error) {
@@ -948,16 +977,24 @@ export async function runInferenceWithTools(
                 };
                 allToolExecutions.push(toolExecution);
 
-                const errorMessage: ChatMessage = {
-                    id: `tool-error-${Date.now()}-${toolCall.id}`,
-                    role: MessageRole.User,
-                    content: formatToolResult(
-                        toolCall.name,
-                        `Error: ${error instanceof Error ? error.message : String(error)}`,
-                        true
-                    ),
-                    timestamp: Date.now(),
-                };
+                const errorMessage: ChatMessage = isNativeFunctionCalling
+                    ? {
+                        id: `tool-error-${Date.now()}-${toolCall.id}`,
+                        role: MessageRole.Tool,
+                        content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+                        timestamp: Date.now(),
+                        toolCallId: toolCall.id,
+                    }
+                    : {
+                        id: `tool-error-${Date.now()}-${toolCall.id}`,
+                        role: MessageRole.User,
+                        content: formatToolResult(
+                            toolCall.name,
+                            `Error: ${error instanceof Error ? error.message : String(error)}`,
+                            true
+                        ),
+                        timestamp: Date.now(),
+                    };
 
                 toolResults.push(errorMessage);
 

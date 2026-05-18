@@ -38,6 +38,9 @@ struct OpenAIMessage {
     /// Tool calls in the response (OpenAI format)
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<crate::ai::OpenAIToolCall>>,
+    /// For tool role messages: matches the id from the preceding assistant tool_call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 /// Build a content payload: plain string when no images, multimodal array
@@ -124,6 +127,7 @@ pub async fn run_openai_compatible_inference(
                     role: "user".to_string(),
                     content: Some(payload),
                     tool_calls: None,
+                    tool_call_id: None,
                 });
             }
             MessageRole::Assistant => {
@@ -131,6 +135,17 @@ pub async fn run_openai_compatible_inference(
                     role: "assistant".to_string(),
                     content: Some(serde_json::Value::String(m.content.clone())),
                     tool_calls: m.tool_calls.clone(),
+                    tool_call_id: None,
+                });
+            }
+            MessageRole::Tool => {
+                // Native function-calling tool result — must include tool_call_id
+                // so the API can pair it with the preceding assistant tool_call.
+                openai_messages.push(OpenAIMessage {
+                    role: "tool".to_string(),
+                    content: Some(serde_json::Value::String(m.content.clone())),
+                    tool_calls: None,
+                    tool_call_id: m.tool_call_id.clone(),
                 });
             }
         }
@@ -256,6 +271,7 @@ pub async fn run_openai_compatible_inference(
         error: None,
         tool_calls: choice.message.tool_calls.clone(),
         images: None,
+        tool_call_id: None,
     };
 
     let usage = openai_response.usage.map(|u| TokenUsage {

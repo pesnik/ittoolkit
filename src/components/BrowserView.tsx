@@ -93,6 +93,7 @@ export function BrowserView() {
                     setState((prev) => ({
                         ...prev,
                         sessionId: (params.session_id as string | undefined) ?? prev.sessionId,
+                        url: (params.url as string | undefined) || prev.url,
                         screenshot: params.jpeg as string,
                         receivedAt: Date.now(),
                     }));

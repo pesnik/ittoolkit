@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page } from 'playwright-core';
+import type { Browser, BrowserContext, CDPSession, Page } from 'playwright-core';
 import { chromium } from 'playwright-core';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -37,6 +37,12 @@ export interface SessionRef {
     /** Last AX snapshot. browser_act resolves params.index against this; if
      *  stale (>30s) or absent, the act handler re-snapshots. */
     lastObservation: SessionObservation | null;
+    /** CDP session used for screencast streaming; null for internal sessions. */
+    cdp: CDPSession | null;
+    /** Whether Chromium was launched with a visible window. */
+    headed: boolean;
+    /** Profile mode — needed so promotion preserves the original intent. */
+    profile: 'ephemeral' | 'persistent';
 }
 
 const sessions = new Map<string, SessionRef>();
@@ -50,8 +56,97 @@ export interface OpenOptions {
 
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 
+// Real Chrome 124 UA. Avoids ADFS / enterprise portals blocking headless detection.
+const DEFAULT_USER_AGENT =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 function profileDir(sessionId: string): string {
     return join(homedir(), '.ittoolkit', 'browser', 'profiles', sessionId);
+}
+
+/** Emit a browser.frame JSON-RPC notification on stdout so the Rust host
+ *  forwards it to the frontend as a Tauri `browser-frame` event. */
+function emitFrame(sessionId: string, jpeg: string, url: string): void {
+    process.stdout.write(
+        JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'browser.frame',
+            params: { session_id: sessionId, jpeg, url },
+        }) + '\n',
+    );
+}
+
+/** Upgrade an existing headless session to headed mode, preserving all state.
+ *
+ * Persistent sessions: Chromium has already flushed cookies/localStorage to the
+ * profile dir — closing and relaunching headed picks them up automatically.
+ *
+ * Ephemeral sessions: cookies live only in memory, so we extract them via the
+ * context API before teardown and inject them back after relaunch. Form data
+ * and sessionStorage are not portable across browser processes, but the
+ * navigation URL and cookies are, which covers the SSO redirect / login flow.
+ */
+async function promoteToHeaded(ref: SessionRef): Promise<SessionRef> {
+    const lastUrl = (() => { try { return ref.page.url(); } catch { return null; } })();
+    // For ephemeral sessions, save cookies before the process dies.
+    const savedCookies = ref.profile === 'ephemeral'
+        ? await ref.context.cookies().catch(() => [])
+        : [];
+
+    // Tear down the headless session.
+    if (ref.cdp) await ref.cdp.send('Page.stopScreencast').catch(() => {});
+    sessions.delete(ref.sessionId);
+    await ref.browser.close().catch(() => {});
+
+    // Reopen as headed (persistent sessions will reload profile from disk automatically).
+    const newRef = await getOrOpenSession({
+        sessionId: ref.sessionId,
+        profile: ref.profile,
+        headed: true,
+    });
+
+    // Restore ephemeral cookies.
+    if (savedCookies.length > 0) {
+        await newRef.context.addCookies(savedCookies).catch(() => {});
+    }
+
+    // Navigate back to where we were.
+    if (lastUrl && lastUrl !== 'about:blank' && lastUrl !== '') {
+        await newRef.page.goto(lastUrl, { waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => {});
+    }
+
+    log.info('session promoted to headed', { sessionId: ref.sessionId, lastUrl, profile: ref.profile });
+    return newRef;
+}
+
+/** Start a CDP screencast on `page` and wire frame → stdout notifications.
+ *  Skips internal sessions (sessionId starting with '_').
+ *  Returns the CDPSession so closeSession can stop it, or null on failure. */
+async function startScreencast(page: Page, sessionId: string): Promise<CDPSession | null> {
+    if (sessionId.startsWith('_')) return null;
+    try {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Page.startScreencast', {
+            format: 'jpeg',
+            quality: 80,
+            maxWidth: 1280,
+            maxHeight: 800,
+            everyNthFrame: 1,
+        });
+        cdp.on('Page.screencastFrame', async (event: any) => {
+            const url = (() => { try { return page.url(); } catch { return ''; } })();
+            emitFrame(sessionId, event.data as string, url);
+            // Ack so Chromium sends the next frame (natural backpressure).
+            await cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+        });
+        log.info('screencast started', { sessionId });
+        return cdp;
+    } catch (e) {
+        log.warn('startScreencast failed; BrowserView will show on-demand screenshots only', {
+            sessionId, err: String(e),
+        });
+        return null;
+    }
 }
 
 export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
@@ -59,39 +154,62 @@ export async function getOrOpenSession(opts: OpenOptions): Promise<SessionRef> {
     ensureChromiumInstalled();
 
     const existing = sessions.get(opts.sessionId);
-    if (existing) return existing;
+    if (existing) {
+        // Transparent headed upgrade: agent detected human interaction needed
+        // and re-called browser_open with headed:true. Promote without losing state.
+        if (opts.headed && !existing.headed) {
+            return promoteToHeaded(existing);
+        }
+        return existing;
+    }
 
     const viewport = opts.viewport ?? DEFAULT_VIEWPORT;
-    const headless = !(opts.headed ?? false);
+    const headed = opts.headed ?? false;
+    const headless = !headed;
+    const profile = opts.profile === 'persistent' ? 'persistent' : 'ephemeral';
 
-    if (opts.profile === 'persistent') {
+    if (profile === 'persistent') {
         const dir = profileDir(opts.sessionId);
         await mkdir(dir, { recursive: true });
         const context = await chromium.launchPersistentContext(dir, {
             headless,
             viewport,
+            userAgent: DEFAULT_USER_AGENT,
+            // Suppress the `navigator.webdriver` flag that enterprise portals
+            // (ADFS, Azure AD) use to detect and block headless browsers.
+            args: ['--disable-blink-features=AutomationControlled'],
         });
         const page = context.pages()[0] ?? (await context.newPage());
         // launchPersistentContext returns BrowserContext directly; there's no
         // distinct Browser handle. Synthesize a close() shim so the rest of
         // the code can uniformly call browser.close().
         const browser = { close: () => context.close() } as unknown as Browser;
+        const cdp = await startScreencast(page, opts.sessionId);
         const ref: SessionRef = {
-            sessionId: opts.sessionId, browser, context, page, lastObservation: null,
+            sessionId: opts.sessionId, browser, context, page,
+            lastObservation: null, cdp, headed, profile,
         };
         sessions.set(opts.sessionId, ref);
-        log.info('session opened (persistent)', { sessionId: opts.sessionId });
+        log.info('session opened (persistent)', { sessionId: opts.sessionId, headed });
         return ref;
     }
 
-    const browser = await chromium.launch({ headless });
-    const context = await browser.newContext({ viewport });
+    const browser = await chromium.launch({
+        headless,
+        args: ['--disable-blink-features=AutomationControlled'],
+    });
+    const context = await browser.newContext({
+        viewport,
+        userAgent: DEFAULT_USER_AGENT,
+    });
     const page = await context.newPage();
+    const cdp = await startScreencast(page, opts.sessionId);
     const ref: SessionRef = {
-        sessionId: opts.sessionId, browser, context, page, lastObservation: null,
+        sessionId: opts.sessionId, browser, context, page,
+        lastObservation: null, cdp, headed, profile,
     };
     sessions.set(opts.sessionId, ref);
-    log.info('session opened (ephemeral)', { sessionId: opts.sessionId });
+    log.info('session opened (ephemeral)', { sessionId: opts.sessionId, headed });
     return ref;
 }
 
@@ -103,6 +221,9 @@ export async function closeSession(sessionId: string): Promise<boolean> {
     const ref = sessions.get(sessionId);
     if (!ref) return false;
     sessions.delete(sessionId);
+    if (ref.cdp) {
+        await ref.cdp.send('Page.stopScreencast').catch(() => {});
+    }
     try {
         await ref.browser.close();
     } catch (e) {

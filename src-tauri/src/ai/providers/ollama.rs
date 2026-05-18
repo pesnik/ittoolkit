@@ -232,6 +232,9 @@ pub async fn run_ollama_inference(
                 MessageRole::User => "user".to_string(),
                 MessageRole::Assistant => "assistant".to_string(),
                 MessageRole::System => "system".to_string(),
+                // Ollama uses XML-based tool calling; native tool results don't
+                // arise here, but fall back to "user" defensively.
+                MessageRole::Tool => "user".to_string(),
             },
             content: m.content.clone(),
         });
@@ -355,6 +358,7 @@ pub async fn run_ollama_inference(
         error: None,
         tool_calls: None,
         images: None,
+        tool_call_id: None,
     };
 
     Ok(InferenceResponse {

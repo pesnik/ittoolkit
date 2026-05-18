@@ -31,6 +31,7 @@ export enum MessageRole {
     User = 'user',
     Assistant = 'assistant',
     System = 'system',
+    Tool = 'tool',
 }
 
 /**
@@ -195,6 +196,9 @@ export interface ChatMessage {
      *  OpenAI-compatible provider emits these as content[].image_url blocks
      *  when present; other providers drop them. */
     images?: string[];
+    /** For Tool role messages: the tool_call_id this result corresponds to.
+     *  Must match the id of the tool_call in the preceding assistant message. */
+    toolCallId?: string;
 }
 
 /**

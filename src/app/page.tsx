@@ -81,15 +81,19 @@ export default function Home() {
   const [workspace, setWorkspace] = useState<Workspace>('files');
   const showWorkspaceTabs = featureFlags.browserAgent;
 
-  // Auto-switch to BrowserView when a browser_observe event arrives, so the
-  // user sees the page state without manually clicking the tab.
+  // Auto-switch to the Browser tab whenever the agent opens a session or
+  // receives an observe update — whichever comes first.
   useEffect(() => {
     if (!showWorkspaceTabs) return;
-    const handler = () => {
-      setWorkspace((w) => (w === 'files' ? 'browser' : w));
+    const switchToBrowser = () => {
+      setWorkspace((w) => (w !== 'workflows' ? 'browser' : w));
     };
-    window.addEventListener('browser-view-update', handler as EventListener);
-    return () => window.removeEventListener('browser-view-update', handler as EventListener);
+    window.addEventListener('browser-session-opened', switchToBrowser);
+    window.addEventListener('browser-view-update', switchToBrowser);
+    return () => {
+      window.removeEventListener('browser-session-opened', switchToBrowser);
+      window.removeEventListener('browser-view-update', switchToBrowser);
+    };
   }, [showWorkspaceTabs]);
 
   const onWorkspaceChange = useCallback((_e: SelectTabEvent, data: SelectTabData) => {
@@ -180,7 +184,13 @@ export default function Home() {
               onAskAgent={handleAskAgent}
             />
           )}
-          {workspace === 'browser' && <BrowserView />}
+          {/* BrowserView stays mounted so its screenshot state survives tab switches.
+              Hidden via CSS rather than unmounted — display:none preserves the DOM. */}
+          {showWorkspaceTabs && (
+            <div style={{ display: workspace === 'browser' ? 'contents' : 'none' }}>
+              <BrowserView />
+            </div>
+          )}
           {workspace === 'workflows' && <WorkflowsPanel />}
         </div>
       </div>
