@@ -193,13 +193,16 @@ async function executeTool(
     if (normalized.name === 'search_conversations') {
         return executeSearchConversations(normalized.arguments);
     }
+    if (normalized.name === 'web_search') {
+        return executeWebSearch(normalized.arguments);
+    }
     if (normalized.name.startsWith('browser_')) {
         return executeBrowserTool(normalized.name, normalized.arguments);
     }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "agent_action" (action, paths). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "web_search" (query), "agent_action" (action, paths). Use one of these exact names.`,
             isError: true,
         };
     }
@@ -383,6 +386,25 @@ async function executeBrowserTool(
         if (toolName === 'browser_navigate') {
             const r = result as any;
             summary = `Navigated to ${r?.url ?? args.url} — ${r?.title ?? ''}`;
+            if (r?.site_profile) summary += `\nSite profile matched: ${r.site_profile}`;
+
+            // Inject site-specific behavioral knowledge from the skill file.
+            // This gives the model immediate guidance on how to interact with the
+            // site (ARIA patterns, multi-step flows, known gotchas) without the
+            // agent needing to discover them by trial and error.
+            try {
+                const landedUrl = String(r?.url ?? args.url ?? '');
+                const hostname = landedUrl ? new URL(landedUrl).hostname : '';
+                if (hostname) {
+                    const siteKnowledge = await invoke<string | null>('get_site_skill_body', { hostname });
+                    if (siteKnowledge) {
+                        summary += `\n\n<site-knowledge host="${hostname}">\n${siteKnowledge}\n</site-knowledge>`;
+                    }
+                }
+            } catch {
+                // Unknown URL format or no skill file — operate generically.
+            }
+
             // URL scheme determines classification — already gated upstream
             // but we record it accurately here.
             const url = String(args.url ?? '');
@@ -682,6 +704,30 @@ async function executeSearchConversations(args: Record<string, unknown>): Promis
         return { content: formatted, isError: false };
     } catch (e) {
         return { content: `search_conversations failed: ${e}`, isError: true };
+    }
+}
+
+async function executeWebSearch(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const query = ((args.query as string) ?? '').trim();
+    if (!query) {
+        return { content: 'web_search: missing required argument "query"', isError: true };
+    }
+    try {
+        const results = await invoke<Array<{ title: string; snippet: string; url: string }>>(
+            'web_search_ddg', { query }
+        );
+        if (!results || results.length === 0) {
+            return { content: `No results found for "${query}".`, isError: false };
+        }
+        const lines = results.map((r, i) =>
+            `[${i + 1}] ${r.title}\n${r.snippet}\nURL: ${r.url}`
+        );
+        return { content: lines.join('\n\n'), isError: false };
+    } catch (e) {
+        return { content: `web_search failed: ${e}`, isError: true };
     }
 }
 

@@ -511,6 +511,28 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Seed individual files that don't yet exist at destination (merges, not replaces).
+/// Used for the `browser-sites` sub-skill directory so new hostname skills are
+/// added on upgrade without overwriting any user edits to existing ones.
+fn seed_dir_merge(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            seed_dir_merge(&from, &to)?;
+        } else if !to.exists() {
+            // Only copy if destination file doesn't exist — preserves user edits.
+            fs::copy(&from, &to)?;
+            debug!("Seeded skill file: {:?}", to);
+        }
+    }
+    Ok(())
+}
+
 pub fn seed_default_skills(app: &AppHandle) -> Result<(), String> {
     let user_dir = skills_dir()?;
     let resource_root = app
@@ -539,14 +561,41 @@ pub fn seed_default_skills(app: &AppHandle) -> Result<(), String> {
             None => continue,
         };
         let dst = user_dir.join(&name);
-        if dst.exists() {
-            continue;
-        }
-        if let Err(e) = copy_dir_recursive(&src, &dst) {
-            warn!("Failed to seed skill {}: {}", name, e);
+        // browser-sites is a container of per-hostname skill dirs — merge so
+        // new hostnames are added on upgrade without overwriting user edits.
+        if name == "browser-sites" {
+            if let Err(e) = seed_dir_merge(&src, &dst) {
+                warn!("Failed to merge browser-sites skills: {}", e);
+            }
         } else {
-            debug!("Seeded default skill: {}", name);
+            if dst.exists() {
+                continue;
+            }
+            if let Err(e) = copy_dir_recursive(&src, &dst) {
+                warn!("Failed to seed skill {}: {}", name, e);
+            } else {
+                debug!("Seeded default skill: {}", name);
+            }
         }
     }
     Ok(())
+}
+
+/// Look up a site-specific behavioral skill for a given hostname.
+/// Checks `~/.ittoolkit/skills/browser-sites/{hostname}/SKILL.md` and
+/// returns the markdown body (without frontmatter) if found.
+#[command]
+pub fn get_site_skill_body(hostname: String) -> Option<String> {
+    let dir = skills_dir().ok()?;
+    let skill_path = dir
+        .join("browser-sites")
+        .join(hostname.to_lowercase())
+        .join("SKILL.md");
+    if !skill_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&skill_path).ok()?;
+    let (_fm, body) = split_frontmatter(&content)?;
+    let trimmed = body.trim().to_string();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
 }

@@ -360,6 +360,31 @@ export function canUseBrowserTools(modelConfig: ModelConfig): boolean {
     return activeModelSupportsVision(modelConfig);
 }
 
+// Web search tool (DuckDuckGo, no API key required).
+// Available when browser tools are active so the agent can research unknown
+// sites, find automation best practices, or look up documentation.
+const WEB_SEARCH_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'web_search',
+        description: `Search the web using DuckDuckGo. Use this to research automation techniques for unfamiliar websites, find Playwright/ARIA documentation, or look up best practices. Returns up to 5 results with title, snippet, and URL.
+
+When automating a site with no <site-knowledge> block, call web_search("[site] playwright automation aria selectors") to learn the site's DOM patterns before attempting browser_act.
+
+After succeeding with a new site, write your findings to ~/.ittoolkit/skills/browser-sites/{hostname}/SKILL.md via execute_command so the knowledge persists for future sessions.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Search query. Be specific: e.g. "WhatsApp Web aria-label selectors playwright" not just "WhatsApp".',
+                },
+            },
+            required: ['query'],
+        },
+    },
+};
+
 // Native function calling tool: search across the user's prior conversations.
 // Use this when the user references something from a previous chat ("the script
 // we wrote last week", "remember when…", "what did we decide about X").
@@ -657,6 +682,7 @@ export async function runInference(
         }
         if (canUseBrowserTools(request.modelConfig)) {
             tools.push(...BROWSER_TOOLS);
+            tools.push(WEB_SEARCH_TOOL);
         }
         requestWithSystem = {
             ...requestWithSystem,

@@ -17,6 +17,7 @@ mod browser_capability;
 mod browser_classify;
 mod browser_commands;
 mod workflow_recorder;
+mod web_search;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -103,9 +104,12 @@ pub fn run() {
         skills::list_skills,
         skills::get_skill_source,
         skills::load_skill_body,
+        skills::get_site_skill_body,
         skills::set_skill_enabled,
         skills::set_skill_trusted,
         skills::open_skills_folder,
+        // Web search (DuckDuckGo, no API key)
+        web_search::web_search_ddg,
         // User info
         user_info::get_user_name,
         // Audit log for destructive agent actions
