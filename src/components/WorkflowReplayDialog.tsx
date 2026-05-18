@@ -160,6 +160,21 @@ function methodToToolName(method: string): string {
     return method.replace('browser.', 'browser_');
 }
 
+/** Pause for a human-paced interval after a step completes.
+ *  Timings are calibrated to match realistic operator cadence with ±20% jitter. */
+function humanDelay(tool: string, params: Record<string, unknown>): Promise<void> {
+    const jitter = 0.8 + Math.random() * 0.4;
+    let base = 700; // default between steps
+    if (tool === 'browser.navigate') base = 1600; // page load + glance
+    else if (tool === 'browser.open') base = 900;
+    else if (tool === 'browser.act') {
+        const action = params.action as string | undefined;
+        base = (action === 'type' || action === 'fill') ? 650 : 950;
+    } else if (tool === 'browser.observe') base = 500;
+    else if (tool === 'browser.extract') base = 400;
+    return new Promise((r) => setTimeout(r, Math.round(base * jitter)));
+}
+
 /** Force every browser.open step to open a visible (headed) window so the
  *  user can always see what's happening and take over for auth/CAPTCHA. */
 function applyReplayOverrides(steps: WorkflowStep[]): WorkflowStep[] {
@@ -319,6 +334,10 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
                         next[i] = { status: 'done', result: r.result as Record<string, unknown> };
                         return next;
                     });
+                    // Pause between steps so the replay looks and feels human.
+                    if (i < bound.length - 1) {
+                        await humanDelay(bound[i].tool, bound[i].params);
+                    }
                 } else if (r.error === 'Denied by user') {
                     setStepStates((prev) => {
                         const next = [...prev];
