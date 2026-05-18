@@ -168,13 +168,6 @@ const useStyles = makeStyles({
         padding: '12px',
         background: '#fff0f0',
     },
-    footer: {
-        display: 'flex',
-        justifyContent: 'flex-end',
-        gap: '8px',
-        paddingTop: '4px',
-        flexShrink: 0,
-    },
 });
 
 function StepIcon({ status }: { status: StepStatus }) {
@@ -389,20 +382,31 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
                 className={`${styles.titleBar}${dragging ? ` ${styles.titleBarDragging}` : ''}`}
                 onMouseDown={onTitleMouseDown}
             >
-                <Text weight="semibold" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Text weight="semibold" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                     Replay: {name}
                 </Text>
-                {running && !minimized && <Spinner size="extra-tiny" />}
-                {minimized && totalCount > 0 && (
+                {running && (
+                    <Spinner size="extra-tiny" style={{ flexShrink: 0 }} />
+                )}
+                {!running && totalCount > 0 && (
                     <Text size={200} style={{ color: tokens.colorNeutralForeground3, flexShrink: 0 }}>
                         {doneCount}/{totalCount}
                     </Text>
                 )}
-                {minimized && humanMode && (
+                {humanMode && (
                     <Text size={200} style={{ color: tokens.colorPaletteBlueForeground2, flexShrink: 0 }}>
-                        Waiting for you
+                        Waiting…
                     </Text>
                 )}
+                <Button
+                    appearance="primary"
+                    size="small"
+                    style={{ flexShrink: 0 }}
+                    disabled={!workflow || running || !allParamsFilled}
+                    onClick={run}
+                >
+                    {running ? 'Replaying…' : boundSteps.length ? 'Re-run' : 'Run'}
+                </Button>
                 <Button
                     appearance="subtle"
                     size="small"
@@ -522,18 +526,6 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
                                 </div>
                             )}
 
-                            {/* Footer actions */}
-                            <div className={styles.footer}>
-                                <Button appearance="secondary" size="small" onClick={onClose}>Close</Button>
-                                <Button
-                                    appearance="primary"
-                                    size="small"
-                                    disabled={!workflow || running || !allParamsFilled}
-                                    onClick={run}
-                                >
-                                    {running ? 'Replaying…' : boundSteps.length ? 'Re-run' : 'Run'}
-                                </Button>
-                            </div>
                         </>
                     )}
                 </div>
