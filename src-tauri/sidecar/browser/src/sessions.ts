@@ -14,14 +14,72 @@ function ensureChromiumInstalled(): void {
             throw new Error(`chromium binary not found at expected path: ${exePath}`);
         }
     } catch {
-        const cwd = process.cwd();
         throw new Error(
-            `Chromium is not installed. Run the following from the sidecar directory:\n\n` +
-            `  cd ${cwd}\n` +
-            `  npm run postinstall\n\n` +
-            `This will download the Chromium browser binary required for browser automation.`
+            `Chromium is not installed. Run:\n\n` +
+            `  cd src-tauri/sidecar/browser && npm run postinstall\n\n` +
+            `This will download the Chromium binary required for browser automation.`
         );
     }
+}
+
+/**
+ * Check whether Chromium is available and, if not, download it automatically.
+ * Intended to be called once at sidecar startup before accepting RPC requests.
+ *
+ * `onProgress` is called with human-readable status messages that the caller
+ * can forward to the Rust host as `sidecar.progress` notifications.
+ *
+ * In production builds where playwright-core is not available as a module
+ * (Chromium is expected to be bundled as a Tauri resource) this is a no-op.
+ */
+export async function autoInstallChromiumIfNeeded(
+    onProgress: (msg: string) => void,
+): Promise<void> {
+    try {
+        const exePath = chromium.executablePath();
+        if (existsSync(exePath)) return;
+    } catch {
+        // executablePath() can throw if the playwright-core registry is not
+        // initialised — treat the same as "not found".
+    }
+
+    onProgress(
+        'Chromium not found — downloading browser for first-time setup (this may take a few minutes)…',
+    );
+
+    const { execFileSync } = await import('node:child_process');
+    const { createRequire } = await import('node:module');
+
+    // Locate the playwright CLI that ships alongside playwright-core.
+    // createRequire(import.meta.url) works for the ESM-compiled dist files.
+    // Fall back to a path heuristic for unusual layouts.
+    let cliPath: string | null = null;
+    try {
+        const req = createRequire(import.meta.url);
+        cliPath = req.resolve('playwright-core/cli');
+    } catch {
+        const { fileURLToPath } = await import('node:url');
+        const { dirname } = await import('node:path');
+        const here = dirname(fileURLToPath(import.meta.url));
+        const candidate = join(here, '..', 'node_modules', 'playwright-core', 'cli.js');
+        if (existsSync(candidate)) cliPath = candidate;
+    }
+
+    if (!cliPath) {
+        // Production binary: Chromium should be bundled as a Tauri resource.
+        log.warn('playwright CLI not found — skipping auto-install (expected in production build)');
+        return;
+    }
+
+    // Run `node <cli> install chromium`.
+    // stdout stays clean (JSON-RPC stream); install progress goes to stderr
+    // which Rust drains into the app log.
+    execFileSync(process.execPath, [cliPath, 'install', 'chromium'], {
+        stdio: ['ignore', process.stderr, process.stderr],
+        timeout: 10 * 60 * 1000,
+    });
+
+    onProgress('Chromium installed — browser ready.');
 }
 
 export interface SessionObservation {

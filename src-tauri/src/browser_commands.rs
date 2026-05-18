@@ -29,7 +29,8 @@ const SIDECAR_REL_DEV: &str = "sidecar/browser/dist/index.js";
 const SIDECAR_REL_DEV_TS: &str = "sidecar/browser/src/index.ts";
 /// Name of the bundled sidecar binary (no extension; .exe added on Windows).
 const SIDECAR_BIN_NAME: &str = "ittoolkit-browser";
-const SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 30;
+// First-run may need to download Chromium (~minutes on a slow connection).
+const SIDECAR_STARTUP_TIMEOUT_SECS: u64 = 600;
 const RPC_TIMEOUT_SECS: u64 = 90;
 const FRAME_EVENT: &str = "browser-frame";
 

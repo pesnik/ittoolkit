@@ -53,6 +53,16 @@ async function main(): Promise<void> {
             'browser.close': close.handleClose,
         };
         closeAllSessions = sessions.closeAllSessions;
+
+        // Auto-install Chromium on first run before accepting any RPC requests.
+        // Emits sidecar.progress notifications so the host/UI can show status.
+        await sessions.autoInstallChromiumIfNeeded((msg) => {
+            process.stdout.write(JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'sidecar.progress',
+                params: { message: msg },
+            }) + '\n');
+        });
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('sidecar failed to load modules', { err: message });

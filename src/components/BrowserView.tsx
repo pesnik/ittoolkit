@@ -14,7 +14,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { makeStyles, tokens, Text, Button } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Button, Spinner } from '@fluentui/react-components';
 
 interface ViewportState {
     sessionId?: string;
@@ -81,6 +81,7 @@ const useStyles = makeStyles({
 export function BrowserView() {
     const styles = useStyles();
     const [state, setState] = useState<ViewportState>({});
+    const [setupMessage, setSetupMessage] = useState<string | null>(null);
 
     useEffect(() => {
         // Notifications from the sidecar (live frame stream — not used in
@@ -97,6 +98,8 @@ export function BrowserView() {
                         screenshot: params.jpeg as string,
                         receivedAt: Date.now(),
                     }));
+                } else if (method === 'sidecar.progress' && typeof params?.message === 'string') {
+                    setSetupMessage(params.message as string);
                 }
             },
         );
@@ -154,11 +157,16 @@ export function BrowserView() {
                         alt={state.title ?? 'browser screenshot'}
                         className={styles.screenshot}
                     />
+                ) : setupMessage ? (
+                    <div className={styles.empty} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                        <Spinner size="medium" />
+                        <Text>{setupMessage}</Text>
+                    </div>
                 ) : (
                     <div className={styles.empty}>
                         <Text>
                             The agent has not opened a browser session yet. Ask it to perform a web task
-                            (e.g. <em>“Open https://example.com and tell me the page title”</em>) and the
+                            (e.g. <em>"Open https://example.com and tell me the page title"</em>) and the
                             screenshot will appear here.
                         </Text>
                     </div>
