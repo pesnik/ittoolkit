@@ -5,11 +5,12 @@
 //
 // Locator resolution uses a multi-strategy chain with a per-strategy timeout
 // so a single bad strategy never blocks for 30s. Strategies in priority order:
+//   0. Site-profile strategies (prepended from site-profiles.ts, site knows its DOM best)
 //   1. getByRole(role, { name, exact })    — standard AX match
 //   2. getByText(name, { exact })          — text/statictext nodes in SPAs
 //   3. [aria-label="name"]                 — custom ARIA labels (chat apps etc.)
 //   4. [title="name"]                      — title attributes
-//   5. >> [aria-label="name"]              — shadow DOM piercing
+//   5. css=[aria-label="name"]             — shadow DOM piercing
 //   6. getByRole(role).first()             — nth-of-role last resort
 //
 // If the final click/fill still throws, a screenshot is attached to the error
@@ -19,6 +20,7 @@ import type { Page, Locator } from 'playwright-core';
 import { getSession } from '../sessions.js';
 import { captureAxTree, captureScreenshot, type AxNode } from '../snapshot.js';
 import { log } from '../log.js';
+import type { SiteProfile } from '../site-profiles.js';
 
 const SNAPSHOT_STALE_MS = 30_000;
 const STRATEGY_TIMEOUT_MS = 5_000;
@@ -62,10 +64,22 @@ async function tryLocator(loc: Locator): Promise<Locator | null> {
     return null;
 }
 
-async function resolveLocator(page: Page, node: AxNode): Promise<Locator> {
+async function resolveLocator(page: Page, node: AxNode, profile?: SiteProfile): Promise<Locator> {
     const role = pwRole(node.role);
     const name = node.name ?? '';
     const isTextNode = node.role === 'text' || node.role === 'StaticText';
+    const escaped = name.replace(/"/g, '\\"');
+
+    // Strategy 0: site-profile strategies — tried first because the site knows its own DOM best.
+    // (e.g. WhatsApp: [aria-label="{name}"] before generic role-based lookup)
+    if (name && profile?.locatorStrategies) {
+        for (const strat of profile.locatorStrategies) {
+            if (strat.roles && !strat.roles.includes(node.role)) continue;
+            const sel = strat.selector.replace(/{name}/g, escaped);
+            const loc = await tryLocator(page.locator(sel));
+            if (loc) return loc;
+        }
+    }
 
     // Strategy 1: exact role + name (standard AX match — works for buttons, links, etc.)
     if (name && !isTextNode) {
@@ -83,21 +97,18 @@ async function resolveLocator(page: Page, node: AxNode): Promise<Locator> {
 
     // Strategy 3: aria-label attribute (custom components, chat lists, icon buttons)
     if (name) {
-        const escaped = name.replace(/"/g, '\\"');
         const loc = await tryLocator(page.locator(`[aria-label="${escaped}"]`));
         if (loc) return loc;
     }
 
     // Strategy 4: title attribute
     if (name) {
-        const escaped = name.replace(/"/g, '\\"');
         const loc = await tryLocator(page.locator(`[title="${escaped}"]`));
         if (loc) return loc;
     }
 
     // Strategy 5: shadow DOM piercing — catches elements nested inside Web Components
     if (name) {
-        const escaped = name.replace(/"/g, '\\"');
         const loc = await tryLocator(page.locator(`css=[aria-label="${escaped}"]`));
         if (loc) return loc;
     }
@@ -157,7 +168,14 @@ export async function handleAct(params: ActParams): Promise<ActResult> {
             throw new Error(`browser.act: index ${idx} out of range (have ${observation.ax.length} nodes). Call browser_observe to refresh.`);
         }
         const node = observation.ax[idx];
-        const locator = await resolveLocator(ref.page, node);
+
+        // Site-profile preActDelayMs: some SPAs re-render between observe and act.
+        const preDelay = ref.siteProfile?.preActDelayMs;
+        if (preDelay) {
+            await new Promise(r => setTimeout(r, preDelay));
+        }
+
+        const locator = await resolveLocator(ref.page, node, ref.siteProfile);
 
         try {
             switch (action) {

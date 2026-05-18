@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { log } from './log.js';
 import type { AxNode } from './snapshot.js';
+import type { SiteProfile } from './site-profiles.js';
 
 function ensureChromiumInstalled(): void {
     try {
@@ -103,6 +104,9 @@ export interface SessionRef {
     headed: boolean;
     /** Profile mode — needed so promotion preserves the original intent. */
     profile: 'ephemeral' | 'persistent';
+    /** Site-specific config matched from the current page URL. Set/updated on
+     *  every browser.navigate. Undefined for unrecognised sites. */
+    siteProfile?: SiteProfile;
 }
 
 const sessions = new Map<string, SessionRef>();

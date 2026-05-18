@@ -5,9 +5,9 @@ interface ObserveParams {
     session_id?: string;
     include_screenshot?: boolean;
     max_elements?: number;
-    /** When true, wait for network idle before capturing the AX snapshot.
-     *  Use for SPAs (WhatsApp Web, Gmail, etc.) where domcontentloaded fires
-     *  before the JS framework renders interactive content. Default: false. */
+    /** Wait for network idle before capturing the AX snapshot.
+     *  Overrides the site profile setting when explicitly provided.
+     *  Default: false (unless the matched site profile sets waitForIdle). */
     wait_for_idle?: boolean;
 }
 
@@ -16,6 +16,7 @@ export async function handleObserve(params: ObserveParams): Promise<{
     title: string;
     ax: AxNode[];
     screenshot?: string;
+    site_profile?: string;
 }> {
     if (!params.session_id) throw new Error('browser.observe requires "session_id"');
     const ref = getSession(params.session_id);
@@ -23,16 +24,26 @@ export async function handleObserve(params: ObserveParams): Promise<{
         throw new Error(`browser.observe: session "${params.session_id}" not open. Call browser.open first.`);
     }
 
-    const maxElements = typeof params.max_elements === 'number' && params.max_elements > 0
-        ? Math.min(params.max_elements, 200)
-        : 80;
-    const includeScreenshot = params.include_screenshot !== false;
+    const profile = ref.siteProfile;
 
-    // For SPAs, wait for the JS framework to finish rendering before snapshotting.
-    // Capped at 10s — networkidle may never fire on pages with polling/websockets.
-    if (params.wait_for_idle) {
+    // Param overrides profile; profile overrides default (false).
+    const shouldWaitIdle = params.wait_for_idle ?? profile?.waitForIdle ?? false;
+
+    // For SPAs, wait for network to quiesce before snapshotting.
+    // Capped at 10s — networkidle may never fire on pages with websockets.
+    if (shouldWaitIdle) {
         await ref.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
     }
+
+    // Wait for a site-specific readiness signal (e.g. WhatsApp's #pane-side).
+    if (profile?.readySelector) {
+        await ref.page.waitForSelector(profile.readySelector, {
+            timeout: profile.readyTimeout ?? 10_000,
+        }).catch(() => {});
+    }
+
+    const maxElements = params.max_elements ?? profile?.axMaxElements ?? 80;
+    const includeScreenshot = params.include_screenshot !== false;
 
     const [ax, screenshot, title] = await Promise.all([
         captureAxTree(ref.page, maxElements),
@@ -47,5 +58,6 @@ export async function handleObserve(params: ObserveParams): Promise<{
         title,
         ax,
         ...(screenshot ? { screenshot } : {}),
+        ...(profile ? { site_profile: profile.name } : {}),
     };
 }
