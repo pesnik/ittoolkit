@@ -221,7 +221,7 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
 
     // --- position / drag ---
     const [pos, setPos] = useState(initialPosition);
-    const [minimized, setMinimized] = useState(false);
+    const [minimized, setMinimized] = useState(true);
     const dragRef = useRef({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
     const [dragging, setDragging] = useState(false);
 
@@ -338,6 +338,7 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
         if (!workflow) return;
         setRunning(true);
         setActive(true);
+        setMinimized(false);
         setError(null);
         window.dispatchEvent(new CustomEvent('workflow-replay-started'));
         try {
@@ -377,12 +378,7 @@ export function WorkflowReplayDialog({ slug, name, onClose }: Props) {
     const panel = (
         <div
             className={styles.panel}
-            style={{
-                left: pos.x,
-                top: pos.y,
-                opacity: active ? 1 : 0.55,
-                transition: 'opacity 0.3s ease',
-            }}
+            style={{ left: pos.x, top: pos.y }}
         >
             {/* ── Title bar / drag handle ── */}
             <div
