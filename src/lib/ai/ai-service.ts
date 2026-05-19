@@ -826,13 +826,36 @@ Emit a structured action the app renders natively (clickable chips, confirmation
 
 Tool: agent_action
 Arguments:
-  - action (string, REQUIRED): one of "navigate", "open_file", "highlight", "confirm_action".
+  - action (string, REQUIRED): one of "navigate", "open_file", "highlight", "confirm_action", "workflow_card".
   - paths (array of strings, REQUIRED): one or more absolute paths (POSIX "/…" or Windows "C:\\…"). For navigate/open_file the app uses paths[0].
   - title (string, REQUIRED for confirm_action): plain text, ≤ 500 chars.
   - description (string, REQUIRED for confirm_action): plain text body, ≤ 500 chars.
   - suggestedCommand (string, REQUIRED for confirm_action): the EXACT shell command the app will run verbatim if the user clicks Execute. Use single-quoted paths to handle spaces.
   - suggestedWorkingDir (string, REQUIRED for confirm_action): absolute working directory for suggestedCommand.
   - totalSize (number, optional): total bytes; used for the card display.
+
+### workflow_card
+Emit a structured workflow preview card the user can accept, edit, or dismiss. Use this AFTER designing the complete workflow — the card lets the user review, test individual steps, and save with one click.
+Arguments:
+  - workflow (object, REQUIRED): full WorkflowFileV2 object with name, slug, description, goal, variables, and steps.
+
+Example — after designing a workflow for resetting Okta passwords:
+  agent_action {
+    "action": "workflow_card",
+    "workflow": {
+      "version": 2,
+      "name": "Reset Okta Password",
+      "slug": "reset-okta-password",
+      "description": "Reset a user's Okta password via the admin console",
+      "goal": "User notified that their password has been reset and they can log in with the temporary password",
+      "createdAt": "2026-01-01T00:00:00Z",
+      "variables": [{"name":"user_email","type":"string","source":"conversation_context","description":"Email of the user to reset","defaultValue":""}],
+      "steps": [
+        {"id":"step-open","intent":"Open Okta admin session","tool":"browser.open","params":{"session_id":"okta","profile":"persistent"},"actor":"auto","classification":"read","retry":{"maxAuto":2,"escalateTo":"human"}},
+        {"id":"step-navigate","intent":"Navigate to Okta admin users","tool":"browser.navigate","params":{"session_id":"okta","url":"https://{{okta_domain}}/admin/users"},"actor":"auto","classification":"read","retry":{"maxAuto":2,"escalateTo":"human"}}
+      ]
+    }
+  }
   - severity (string, optional): "low" | "medium" | "high". Defaults to "medium" if omitted. The app auto-escalates to "high" for system paths (/System, /usr, /Library, C:\\Windows, …) or operations over 10 GiB / 50 paths regardless of what you claim.
 
 Hard limits enforced at dispatch (the call fails if you exceed them):

@@ -1020,7 +1020,6 @@ export const AIPanel = ({
                             }
                         }
                     }
-
                     // Primary match: per-call id (model can invoke the same
                     // tool multiple times in a single turn).
                     // Fallback: oldest 'executing' row for the same toolName.
@@ -1207,7 +1206,7 @@ export const AIPanel = ({
         }
     };
 
-    const handleToolActionResponse = useCallback(async (actionId: string, response: 'confirm' | 'dismiss') => {
+    const handleToolActionResponse = useCallback(async (actionId: string, response: 'confirm' | 'dismiss' | 'accept' | 'edit' | 'decline') => {
         // Check suggest_skill registry first — different handling path from confirm_action.
         const pendingSkill = pendingSkillActionsRef.current.get(actionId);
         if (pendingSkill) {

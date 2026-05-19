@@ -506,15 +506,36 @@ function executeAgentAction(
     }
 
     const rawAction = typeof args.action === 'string' ? args.action.trim() : '';
-    const ALLOWED_ACTIONS = new Set(['navigate', 'open_file', 'highlight', 'confirm_action', 'suggest_skill']);
+    const ALLOWED_ACTIONS = new Set(['navigate', 'open_file', 'highlight', 'confirm_action', 'suggest_skill', 'workflow_card']);
     if (!ALLOWED_ACTIONS.has(rawAction)) {
         return {
-            content: `agent_action: invalid "action" value ${JSON.stringify(args.action)}. Must be one of: navigate, open_file, highlight, confirm_action, suggest_skill.`,
+            content: `agent_action: invalid "action" value ${JSON.stringify(args.action)}. Must be one of: navigate, open_file, highlight, confirm_action, suggest_skill, workflow_card.`,
             isError: true,
             actions: [],
         };
     }
-    const action = rawAction as 'navigate' | 'open_file' | 'highlight' | 'confirm_action' | 'suggest_skill';
+    const action = rawAction as 'navigate' | 'open_file' | 'highlight' | 'confirm_action' | 'suggest_skill' | 'workflow_card';
+
+    // workflow_card — no paths required; validate and render a workflow preview.
+    if (action === 'workflow_card') {
+        const raw = args.workflow as Record<string, unknown> | undefined;
+        if (!raw || !raw.name || !raw.slug || !Array.isArray(raw.steps)) {
+            return {
+                content: 'agent_action(workflow_card): "workflow" object with "name", "slug", and "steps" (array) is required.',
+                isError: true,
+                actions: [],
+            };
+        }
+        const actionId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        return {
+            content: `Workflow card emitted: ${String(raw.name)}`,
+            isError: false,
+            actions: [{
+                type: 'workflow_card',
+                payload: { actionId, workflow: raw as any },
+            }],
+        };
+    }
 
     // suggest_skill — no paths required; validate skill/title/description only.
     if (action === 'suggest_skill') {

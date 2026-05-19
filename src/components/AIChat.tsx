@@ -391,7 +391,7 @@ interface AIChatProps {
      *  paste selected file paths so the user can type their intent. */
     prefillInput?: string;
     /** Callback when the user responds to an inline confirm_action card. */
-    onActionResponse?: (actionId: string, response: 'confirm' | 'dismiss') => void;
+    onActionResponse?: (actionId: string, response: 'confirm' | 'dismiss' | 'accept' | 'edit' | 'decline') => void;
 }
 
 export function AIChat({

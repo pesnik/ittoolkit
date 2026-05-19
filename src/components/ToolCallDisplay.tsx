@@ -27,9 +27,11 @@ import {
     ErrorCircle20Regular,
     Info20Regular,
     Sparkle24Regular,
+    Dismiss12Regular,
 } from '@fluentui/react-icons';
 import { ToolExecutionData } from '@/types/ai-types';
 import { AgentActionChip } from './AgentActionChip';
+import { WorkflowCard } from './workflow/WorkflowCard';
 
 /** Lightweight Fluent-styled table for browser_extract array results.
  *  Picks columns from the first row's keys; renders ≤50 rows, ≤6 columns
@@ -266,7 +268,7 @@ const useStyles = makeStyles({
 
 interface ToolCallDisplayProps {
     execution: ToolExecutionData;
-    onActionResponse?: (actionId: string, response: 'confirm' | 'dismiss') => void;
+    onActionResponse?: (actionId: string, response: 'confirm' | 'dismiss' | 'accept' | 'edit' | 'decline') => void;
 }
 
 function formatSize(bytes: number): string {
@@ -632,6 +634,37 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
                                         {JSON.stringify((p as any).data, null, 2)}
                                     </div>
                                 )}
+                            </div>
+                        );
+                    })}
+
+                    {/* Workflow Card */}
+                    {execution.actions?.map((action, idx) => {
+                        if (action.type !== 'workflow_card') return null;
+                        const p = action.payload;
+                        return (
+                            <div key={`workflow-card-${idx}`} style={{ margin: '8px 0' }}>
+                                <div style={{
+                                    display: 'flex',
+                                    justifyContent: 'flex-end',
+                                    marginBottom: '4px',
+                                }}>
+                                    <Button
+                                        size="small"
+                                        appearance="subtle"
+                                        icon={<Dismiss12Regular />}
+                                        onClick={() => onActionResponse?.(p.actionId, 'dismiss')}
+                                    />
+                                </div>
+                                <WorkflowCard
+                                    workflow={p.workflow}
+                                    onAccept={() => onActionResponse?.(p.actionId, 'accept')}
+                                    onEdit={(slug) => {
+                                        window.dispatchEvent(new CustomEvent('workflow:edit', { detail: { slug } }));
+                                        onActionResponse?.(p.actionId, 'edit');
+                                    }}
+                                    onDismiss={() => onActionResponse?.(p.actionId, 'dismiss')}
+                                />
                             </div>
                         );
                     })}

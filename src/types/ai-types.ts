@@ -120,6 +120,10 @@ export type ToolResultAction =
         screenshot?: string;
         sessionId?: string;
         [extra: string]: unknown;
+    } }
+  | { type: 'workflow_card'; payload: {
+        actionId: string;
+        workflow: import('./workflow-types').WorkflowFileV2;
     } };
 
 /**
