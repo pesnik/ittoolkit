@@ -30,7 +30,7 @@ import { WorkflowEngine } from '@/lib/workflows/engine';
 import type { EngineCallbacks } from '@/lib/workflows/engine';
 import { StepRow } from './workflow/StepRow';
 import { VariablesPanel } from './workflow/VariablesPanel';
-import { HumanInputGate, HumanInterventionGate } from './workflow/HumanGate';
+import { HumanInputGate, HumanInterventionGate, StepRepairGate, FixProposalGate } from './workflow/HumanGate';
 import { classifyBrowserAction } from '@/lib/ai/browser-classify';
 import type {
     WorkflowFile,
@@ -40,6 +40,8 @@ import type {
     StepRunStatus,
     ActorKind,
     HumanInput,
+    TraceEvent,
+    RecoveryAction,
 } from '@/types/workflow-types';
 import { isV2 } from '@/types/workflow-types';
 import type { ModelConfig } from '@/types/ai-types';
@@ -54,6 +56,8 @@ interface StepUiState {
     agentReasoning?: string;
     errorMessage?: string;
     screenshot?: string;
+    agentModel?: string;
+    agentUsage?: import('@/types/workflow-types').AgentUsage;
 }
 
 interface PendingApproval {
@@ -78,6 +82,19 @@ interface PendingIntervention {
     agentReasoning?: string;
     screenshot?: string;
     resolve(decision: 'resume' | 'skip' | 'abort'): void;
+}
+
+interface PendingRepair {
+    stepIndex: number;
+    step: WorkflowStepV2;
+    lastError: string;
+    screenshot?: string;
+    resolve(repaired: WorkflowStepV2 | null): void;
+}
+
+interface FixProposal {
+    stepIndex: number;
+    actions: RecoveryAction[];
 }
 
 interface VariableEntry {
@@ -213,11 +230,74 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
     const [runStatus, setRunStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [stepLogs, setStepLogs] = useState<Record<number, string[]>>({});
+    const [traceEvents, setTraceEvents] = useState<TraceEvent[]>([]);
+    const [traceExpanded, setTraceExpanded] = useState(false);
+    const [pendingRepair, setPendingRepair] = useState<PendingRepair | null>(null);
+    const [fixProposal, setFixProposal] = useState<FixProposal | null>(null);
 
     // Human interaction queues
     const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
     const [pendingHumanInput, setPendingHumanInput] = useState<PendingHumanInput | null>(null);
     const [pendingIntervention, setPendingIntervention] = useState<PendingIntervention | null>(null);
+
+    // Build EngineCallbacks
+    const buildCallbacks = useCallback((): EngineCallbacks => ({
+        onStepStatus(idx, status, attempt) {
+            setStepStates((prev) => {
+                const next = [...prev];
+                const current = next[idx] ?? { status: 'pending', attemptCount: 0 };
+                next[idx] = {
+                    ...current,
+                    status,
+                    attemptCount: attempt?.n ?? current.attemptCount,
+                    agentReasoning: attempt?.agentReasoning ?? current.agentReasoning,
+                    errorMessage: attempt?.error ?? (status !== 'done' ? current.errorMessage : undefined),
+                    screenshot: attempt?.screenshotB64 ?? current.screenshot,
+                    agentModel: attempt?.agentModel ?? current.agentModel,
+                    agentUsage: attempt?.agentUsage ?? current.agentUsage,
+                };
+                return next;
+            });
+        },
+        onVariableResolved(varName, value) {
+            setVariables((prev) =>
+                prev.map((v) => v.name === varName ? { ...v, value } : v),
+            );
+        },
+        onHumanInputRequired(step, prompt, inputs) {
+            return new Promise((resolve, reject) => {
+                setPendingHumanInput({ step, prompt, inputs, resolve, reject });
+            });
+        },
+        onHumanInterventionRequired(stepIndex, message, agentReasoning, screenshot) {
+            return new Promise((resolve) => {
+                setPendingIntervention({ stepIndex, message, agentReasoning, screenshot, resolve });
+            });
+        },
+        onApprovalRequired(stepIndex, risk, intent, screenshot) {
+            return new Promise((resolve) => {
+                setPendingApproval({ stepIndex, risk, intent, screenshot, resolve });
+            });
+        },
+        onAgentRecoveryProgress(stepIndex, msg) {
+            setStepLogs((prev) => ({
+                ...prev,
+                [stepIndex]: [...(prev[stepIndex] ?? []), msg],
+            }));
+        },
+        onTraceEvent(event) {
+            setTraceEvents((prev) => [...prev, event]);
+        },
+        onStepRepairRequested(stepIndex, step, lastError, screenshot) {
+            return new Promise((resolve) => {
+                setPendingRepair({ stepIndex, step, lastError, screenshot, resolve });
+            });
+        },
+        onFixAvailable(stepIndex, actions) {
+            // Only propose if actions aren't already in the workflow (avoid duplicates on resume)
+            setFixProposal((prev) => prev ?? { stepIndex, actions });
+        },
+    }), []);
 
     // Load workflow
     useEffect(() => {
@@ -249,54 +329,6 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
         window.dispatchEvent(new CustomEvent('workflow-replay-stopped'));
     }, []);
 
-    const totalSteps = workflow ? (isV2(workflow) ? workflow.steps.length : (workflow as any).steps?.length ?? 0) : 0;
-    const doneCount = stepStates.filter((s) => s.status === 'done').length;
-
-    // Build EngineCallbacks
-    const buildCallbacks = useCallback((): EngineCallbacks => ({
-        onStepStatus(idx, status, attempt) {
-            setStepStates((prev) => {
-                const next = [...prev];
-                const current = next[idx] ?? { status: 'pending', attemptCount: 0 };
-                next[idx] = {
-                    ...current,
-                    status,
-                    attemptCount: attempt?.n ?? current.attemptCount,
-                    agentReasoning: attempt?.agentReasoning ?? current.agentReasoning,
-                    errorMessage: attempt?.error ?? (status !== 'done' ? current.errorMessage : undefined),
-                    screenshot: attempt?.screenshotB64 ?? current.screenshot,
-                };
-                return next;
-            });
-        },
-        onVariableResolved(varName, value) {
-            setVariables((prev) =>
-                prev.map((v) => v.name === varName ? { ...v, value } : v),
-            );
-        },
-        onHumanInputRequired(step, prompt, inputs) {
-            return new Promise((resolve, reject) => {
-                setPendingHumanInput({ step, prompt, inputs, resolve, reject });
-            });
-        },
-        onHumanInterventionRequired(stepIndex, message, agentReasoning, screenshot) {
-            return new Promise((resolve) => {
-                setPendingIntervention({ stepIndex, message, agentReasoning, screenshot, resolve });
-            });
-        },
-        onApprovalRequired(stepIndex, risk, intent, screenshot) {
-            return new Promise((resolve) => {
-                setPendingApproval({ stepIndex, risk, intent, screenshot, resolve });
-            });
-        },
-        onAgentRecoveryProgress(stepIndex, msg) {
-            setStepLogs((prev) => ({
-                ...prev,
-                [stepIndex]: [...(prev[stepIndex] ?? []), msg],
-            }));
-        },
-    }), []);
-
     const run = useCallback(async () => {
         if (!workflow) return;
         setRunning(true);
@@ -304,6 +336,15 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
         setRunStatus(null);
         setStepLogs({});
         window.dispatchEvent(new CustomEvent('workflow-replay-started'));
+
+        // Clear any stale gate data in DB before starting
+        if (existingRun) {
+            try {
+                await invoke('workflow_run_resolve_gate', { runId: existingRun.runId });
+            } catch (e) {
+                console.warn('[RunPanel] clear stale gate failed:', e);
+            }
+        }
 
         const engine = new WorkflowEngine();
         engineRef.current = engine;
@@ -331,10 +372,48 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
         setPendingIntervention(null);
         pendingHumanInput?.reject();
         setPendingHumanInput(null);
-    }, [pendingApproval, pendingIntervention, pendingHumanInput]);
+        pendingRepair?.resolve(null);
+        setPendingRepair(null);
+        setFixProposal(null);
+    }, [pendingApproval, pendingIntervention, pendingHumanInput, pendingRepair, fixProposal]);
+
+    const handleSaveFix = useCallback(async () => {
+        if (!fixProposal || !slug) return;
+        try {
+            const wf = await invoke<WorkflowFile>('workflow_load', { slug });
+            if (!isV2(wf)) return;
+            const newSteps = fixProposal.actions.map((a, i) => ({
+                id: `fix-step-${fixProposal.stepIndex}-${i}`,
+                intent: a.tool === 'browser_open' ? 'Open browser session' : `Execute ${a.tool}`,
+                tool: a.tool === 'browser_open' ? 'browser.open'
+                    : a.tool === 'browser_navigate' ? 'browser.navigate'
+                    : a.tool === 'browser_act' ? 'browser.act'
+                    : a.tool === 'browser_close' ? 'browser.close'
+                    : a.tool,
+                params: a.params as Record<string, unknown>,
+                actor: 'auto' as ActorKind,
+                classification: 'read',
+                retry: { maxAuto: 2, escalateTo: 'agent' as const },
+            }));
+            const updated: WorkflowFileV2 = {
+                ...wf,
+                steps: [
+                    ...wf.steps.slice(0, fixProposal.stepIndex),
+                    ...newSteps,
+                    ...wf.steps.slice(fixProposal.stepIndex),
+                ],
+            };
+            await invoke('workflow_update', { definition: updated });
+            setFixProposal(null);
+        } catch (e) {
+            console.warn('[run-panel] save fix failed:', e);
+        }
+    }, [fixProposal, slug]);
 
     const v2 = workflow && isV2(workflow) ? workflow as WorkflowFileV2 : null;
     const rawSteps: any[] = workflow ? ((isV2(workflow) ? workflow.steps : (workflow as any).steps) ?? []) : [];
+    const totalSteps = workflow ? (isV2(workflow) ? workflow.steps.length : (workflow as any).steps?.length ?? 0) : 0;
+    const doneCount = stepStates.filter((s) => s.status === 'done').length;
     const v2Vars = v2?.variables ?? [];
     const missingRequired = v2Vars.filter(
         (vr) => vr.source === 'human_input' && !vr.defaultValue && !(paramValues[vr.name] ?? '').trim(),
@@ -460,11 +539,71 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
                                                 errorMessage={state.errorMessage}
                                                 screenshot={state.screenshot}
                                                 observedUrl={step.observedUrl}
+                                                agentModel={state.agentModel}
+                                                agentUsage={state.agentUsage}
                                             />
                                         );
                                     })}
                                 </div>
                             </div>
+
+                            {/* Trace timeline */}
+                            {traceEvents.length > 0 && (
+                                <div className={styles.cardSection} style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 14px' }}>
+                                    <button
+                                        onClick={() => setTraceExpanded(e => !e)}
+                                        style={{
+                                            background: 'none', border: 'none', cursor: 'pointer',
+                                            color: tokens.colorNeutralForeground2, fontSize: '11px',
+                                            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                                            padding: 0, fontFamily: 'inherit',
+                                        }}
+                                    >
+                                        {traceExpanded ? <ChevronUp16Regular /> : <ChevronDown16Regular />}
+                                        Trace log ({traceEvents.length} events)
+                                    </button>
+                                    {traceExpanded && (
+                                        <div style={{ marginTop: 6, maxHeight: 200, overflowY: 'auto', fontSize: '10px', fontFamily: 'monospace' }}>
+                                            {traceEvents.map((ev, i) => (
+                                                <div key={i} style={{ display: 'flex', gap: 8, padding: '2px 0', color: tokens.colorNeutralForeground3 }}>
+                                                    <span style={{ color: tokens.colorNeutralForeground4, whiteSpace: 'nowrap' }}>
+                                                        {ev.createdAt.split('T')[1]?.split('.')[0]}
+                                                    </span>
+                                                    <span style={{
+                                                        color: ev.eventType.startsWith('run_') ? tokens.colorPaletteBlueForeground2
+                                                            : ev.eventType.startsWith('step_ok') || ev.eventType.startsWith('recovery_ok') ? tokens.colorPaletteGreenForeground1
+                                                            : ev.eventType.startsWith('step_fail') || ev.eventType.startsWith('recovery_fail') ? tokens.colorPaletteRedForeground1
+                                                            : ev.eventType.startsWith('gate_') ? tokens.colorPaletteDarkOrangeForeground1
+                                                            : tokens.colorNeutralForeground2,
+                                                        fontWeight: ev.eventType === 'step_start' ? 600 : 400,
+                                                    }}>
+                                                        {ev.eventType}
+                                                    </span>
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                        {ev.stepIndex !== null ? `step ${ev.stepIndex}` : ''}
+                                                        {ev.eventData && typeof ev.eventData === 'object' && 'tool' in ev.eventData ? ` ${ev.eventData.tool}` : ''}
+                                                        {ev.eventData && typeof ev.eventData === 'object' && 'error' in ev.eventData ? `: ${String(ev.eventData.error).slice(0, 80)}` : ''}
+                                                        {ev.eventData && typeof ev.eventData === 'object' && 'actor' in ev.eventData ? ` ${ev.eventData.actor}` : ''}
+                                                        {ev.eventData && typeof ev.eventData === 'object' && 'gateType' in ev.eventData ? ` ${ev.eventData.gateType}` : ''}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Fix proposal (agent recovery found missing steps) */}
+                            {fixProposal && (
+                                <div className={styles.cardSection}>
+                                    <FixProposalGate
+                                        stepIndex={fixProposal.stepIndex}
+                                        actions={fixProposal.actions}
+                                        onSave={handleSaveFix}
+                                        onDismiss={() => setFixProposal(null)}
+                                    />
+                                </div>
+                            )}
 
                             {/* Run status */}
                             {runStatus && (
@@ -491,6 +630,25 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
                                         onSkip={() => {
                                             pendingHumanInput.reject();
                                             setPendingHumanInput(null);
+                                        }}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Step repair gate */}
+                            {pendingRepair && (
+                                <div className={styles.cardSection}>
+                                    <StepRepairGate
+                                        step={pendingRepair.step}
+                                        lastError={pendingRepair.lastError}
+                                        screenshot={pendingRepair.screenshot}
+                                        onApply={(patched) => {
+                                            pendingRepair.resolve(patched);
+                                            setPendingRepair(null);
+                                        }}
+                                        onSkip={() => {
+                                            pendingRepair.resolve(null);
+                                            setPendingRepair(null);
                                         }}
                                     />
                                 </div>

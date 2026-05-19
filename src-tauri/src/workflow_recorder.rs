@@ -121,6 +121,7 @@ pub struct ProducesSpec {
 pub struct WorkflowStepV2 {
     pub id: String,
     pub intent: String,
+    pub description: Option<String>,
     pub tool: String,
     pub params: Value,
     pub actor: String, // "auto" | "agent" | "human"
@@ -131,6 +132,7 @@ pub struct WorkflowStepV2 {
     pub produces_from: Option<ProducesSpec>,
     pub postcondition: Option<Postcondition>,
     pub retry: RetryPolicy,
+    pub failure_hints: Option<Vec<String>>,
     // v1 compat
     pub classification: String,
     pub observed_url: Option<String>,
@@ -162,7 +164,29 @@ pub struct WorkflowFileV2 {
     pub steps: Vec<WorkflowStepV2>,
 }
 
+// ── Pending gate (sticky human gates) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingGate {
+    pub gate_type: String, // "human_input" | "human_intervention" | "approval"
+    pub step_index: usize,
+    pub prompt: String,
+    pub inputs: Option<Value>, // serialized HumanInput[]
+    pub metadata: Option<Value>, // extra info (agentReasoning, screenshot, risk, etc.)
+    pub created_at: String,
+}
+
 // ── Run checkpoint ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+    pub inference_time_ms: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,6 +197,8 @@ pub struct StepAttempt {
     pub error: Option<String>,
     pub screenshot_b64: Option<String>,
     pub agent_reasoning: Option<String>,
+    pub agent_model: Option<String>,
+    pub agent_usage: Option<AgentUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +224,30 @@ pub struct WorkflowRun {
     pub step_runs: Vec<WorkflowStepRun>,
     pub paused_at_step: Option<usize>,
     pub pause_reason: Option<String>,
+    pub gate_data: Option<PendingGate>,
+    pub source_conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceEvent {
+    pub id: i64,
+    pub run_id: String,
+    pub step_index: Option<i64>,
+    pub attempt_number: Option<i64>,
+    pub event_type: String,
+    #[serde(default)]
+    pub event_data: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InsertTraceEvent {
+    pub run_id: String,
+    pub step_index: Option<i64>,
+    pub attempt_number: Option<i64>,
+    pub event_type: String,
+    #[serde(default)]
+    pub event_data: Value,
 }
 
 struct ActiveRecording {
@@ -246,6 +296,20 @@ fn slugify(input: &str) -> String {
 fn workflows_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
     Ok(home.join(WORKFLOWS_DIR))
+}
+
+/// Atomically write a JSON-serializable value to a file.
+/// Writes to `{path}.tmp` first, then renames → `{path}` — prevents partial/corrupt
+/// workflow files if the process crashes mid-write (rename is atomic on same filesystem).
+async fn atomic_write(path: &PathBuf, serialized: &str) -> Result<(), String> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, serialized)
+        .await
+        .map_err(|e| format!("failed to write temp file: {}", e))?;
+    fs::rename(&tmp_path, path)
+        .await
+        .map_err(|e| format!("failed to rename temp file: {}", e))?;
+    Ok(())
 }
 
 #[command]
@@ -303,7 +367,7 @@ pub async fn workflow_recording_stop(
         }
     }
     let serialized = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    atomic_write(&path, &serialized).await?;
     Ok(Some(file))
 }
 
@@ -392,7 +456,7 @@ pub async fn workflow_recording_finalize(
         }
     }
     let serialized = serde_json::to_string_pretty(&definition).map_err(|e| e.to_string())?;
-    fs::write(&path, serialized).await.map_err(|e| e.to_string())?;
+    atomic_write(&path, &serialized).await?;
     Ok(definition)
 }
 
@@ -404,9 +468,28 @@ pub async fn workflow_run_create(
     workflow_slug: String,
     resolved_vars: Value,
     step_count: usize,
+    source_conversation_id: Option<String>,
     db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
 ) -> Result<WorkflowRun, String> {
-    db.create_run(&workflow_slug, &resolved_vars, step_count)
+    db.create_run(&workflow_slug, &resolved_vars, step_count, source_conversation_id.as_deref())
+}
+
+/// Insert a trace event into the database for a workflow run.
+#[command]
+pub async fn workflow_trace_event_insert(
+    event: InsertTraceEvent,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<i64, String> {
+    db.insert_trace_event(&event)
+}
+
+/// Query trace events for a given workflow run.
+#[command]
+pub async fn workflow_trace_events_list(
+    run_id: String,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<Vec<TraceEvent>, String> {
+    db.query_trace_events(&run_id)
 }
 
 /// Checkpoint one step's runtime state via SQLite. Called after every step transition.
@@ -421,6 +504,26 @@ pub async fn workflow_run_checkpoint(
     db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
 ) -> Result<(), String> {
     db.checkpoint_step(&run_id, step_index, &step_run, paused_at_step, pause_reason)
+}
+
+/// Persist a pending gate and mark the run as paused.
+/// Called by the engine when a human gate triggers to make it survive app restart.
+#[command]
+pub async fn workflow_run_pause_for_gate(
+    run_id: String,
+    gate: PendingGate,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<(), String> {
+    db.save_pending_gate(&run_id, &gate)
+}
+
+/// Clear the pending gate and mark the run as running again (resolved by user).
+#[command]
+pub async fn workflow_run_resolve_gate(
+    run_id: String,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<(), String> {
+    db.clear_pending_gate(&run_id)
 }
 
 /// Mark a run as completed/failed/cancelled via SQLite.
@@ -440,6 +543,18 @@ pub async fn workflow_run_list_incomplete(
     db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
 ) -> Result<Vec<WorkflowRun>, String> {
     db.list_incomplete_runs()
+}
+
+/// Overwrite an existing workflow definition file with updated content.
+/// Used by the WorkflowEditor to persist edits in-place.
+#[command]
+pub async fn workflow_update(definition: WorkflowFileV2) -> Result<WorkflowFileV2, String> {
+    let dir = workflows_dir()?;
+    fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.workflow.json", definition.slug));
+    let serialized = serde_json::to_string_pretty(&definition).map_err(|e| e.to_string())?;
+    atomic_write(&path, &serialized).await?;
+    Ok(definition)
 }
 
 #[command]

@@ -78,6 +78,7 @@ export interface ProducesSpec {
 export interface WorkflowStepV2 {
   id: string;
   intent: string;
+  description?: string;
   tool: string;
   params: Record<string, unknown>;
   actor: ActorKind;
@@ -88,6 +89,7 @@ export interface WorkflowStepV2 {
   producesFrom?: ProducesSpec;
   postcondition?: Postcondition;
   retry: RetryPolicy;
+  failureHints?: string[];
   // v1 compat fields
   classification: string;
   observedUrl?: string;
@@ -130,6 +132,19 @@ export function isV2(wf: WorkflowFile): wf is WorkflowFileV2 {
 
 // ─── Run state (checkpoint) ──────────────────────────────────────────────────
 
+export interface RecoveryAction {
+    tool: string;
+    params: Record<string, unknown>;
+    executionTimeMs?: number;
+}
+
+export interface AgentUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  inferenceTimeMs: number;
+}
+
 export interface StepAttempt {
   n: number;
   actor: 'auto' | 'agent';
@@ -137,6 +152,8 @@ export interface StepAttempt {
   error?: string;
   screenshotB64?: string;
   agentReasoning?: string;
+  agentModel?: string;
+  agentUsage?: AgentUsage;
 }
 
 export interface WorkflowStepRun {
@@ -156,6 +173,19 @@ export type PauseReason =
   | 'approval'
   | 'agent_recovery_failed';
 
+export type GateType = 'human_input' | 'human_intervention' | 'approval';
+
+export interface PendingGate {
+  gateType: GateType;
+  stepIndex: number;
+  prompt: string;
+  /** HumanInput[] for human_input gates */
+  inputs?: HumanInput[];
+  /** Extra context (agentReasoning, screenshot, risk, etc.) */
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface WorkflowRun {
   runId: string;
   workflowSlug: string;
@@ -165,6 +195,18 @@ export interface WorkflowRun {
   stepRuns: WorkflowStepRun[];
   pausedAtStep?: number;
   pauseReason?: PauseReason;
+  gateData?: PendingGate;
+  sourceConversationId?: string;
+}
+
+export interface TraceEvent {
+  id: number;
+  runId: string;
+  stepIndex: number | null;
+  attemptNumber: number | null;
+  eventType: string;
+  eventData: Record<string, unknown>;
+  createdAt: string;
 }
 
 // ─── Summary (list view) ─────────────────────────────────────────────────────
@@ -192,8 +234,10 @@ export interface VariableHint {
 export interface EnrichedStepHint {
   rawStepIndices: number[];
   intent: string;
+  description?: string;
   actor: ActorKind;
   requiresVariables: string[];
+  failureHints?: string[];
 }
 
 export interface EnrichmentHints {

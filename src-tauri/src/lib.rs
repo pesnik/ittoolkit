@@ -140,12 +140,17 @@ pub fn run() {
         workflow_recorder::workflow_list,
         workflow_recorder::workflow_load,
         workflow_recorder::workflow_delete,
+        workflow_recorder::workflow_update,
         workflow_recorder::workflow_replay_bind,
         // Workflow run checkpoints (durable execution state)
         workflow_recorder::workflow_run_create,
         workflow_recorder::workflow_run_checkpoint,
+        workflow_recorder::workflow_run_pause_for_gate,
+        workflow_recorder::workflow_run_resolve_gate,
         workflow_recorder::workflow_run_complete,
         workflow_recorder::workflow_run_list_incomplete,
+        workflow_recorder::workflow_trace_event_insert,
+        workflow_recorder::workflow_trace_events_list,
         // Browser capability gate (M5: per-skill URL allowlist)
         browser_capability::browser_set_capabilities,
         browser_capability::browser_clear_capabilities,

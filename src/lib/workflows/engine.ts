@@ -27,6 +27,10 @@ import type {
     Postcondition,
     ActorKind,
     HumanInput,
+    PendingGate,
+    GateType,
+    TraceEvent,
+    RecoveryAction,
 } from '@/types/workflow-types';
 import { isV2 } from '@/types/workflow-types';
 import { classifyBrowserAction, type BrowserRisk } from '@/lib/ai/browser-classify';
@@ -66,6 +70,29 @@ export interface EngineCallbacks {
     ): Promise<boolean>;
     /** Agent recovery started/progressing. */
     onAgentRecoveryProgress(stepIndex: number, message: string): void;
+    /** Trace event emitted during workflow execution. */
+    onTraceEvent(event: TraceEvent): void;
+    /**
+     * Called before human intervention to offer the user a chance to repair
+     * the step definition. Return a repaired step to re-execute, or null
+     * to proceed to the human intervention gate.
+     */
+    onStepRepairRequested(
+        stepIndex: number,
+        step: WorkflowStepV2,
+        lastError: string,
+        screenshot?: string,
+    ): Promise<WorkflowStepV2 | null>;
+    /**
+     * Called after agent recovery (or agent forward) succeeds with tool calls
+     * that aren't in the original workflow step. Non-blocking — the workflow
+     * continues executing. The UI may surface a "Save fix to workflow" prompt.
+     */
+    onFixAvailable(
+        stepIndex: number,
+        recoveryActions: RecoveryAction[],
+        reasoning: string,
+    ): void;
 }
 
 // ── Public engine interface ────────────────────────────────────────────────
@@ -83,11 +110,36 @@ export class WorkflowEngine {
     abort() { this.aborted = true; }
     get isAborted() { return this.aborted; }
 
+    private async _trace(
+        eventType: string,
+        stepIndex: number | null,
+        attemptNumber: number | null,
+        eventData: Record<string, unknown>,
+    ) {
+        if (!this.runId) return;
+        const event: TraceEvent = {
+            id: 0,
+            runId: this.runId,
+            stepIndex,
+            attemptNumber,
+            eventType,
+            eventData,
+            createdAt: new Date().toISOString(),
+        };
+        // Fire-and-forget persist to SQLite
+        invoke('workflow_trace_event_insert', { event: { runId: this.runId, stepIndex, attemptNumber, eventType, eventData } }).catch(() => {});
+        // Notify UI
+        this._lastCallbacks?.onTraceEvent(event);
+    }
+
+    private _lastCallbacks: EngineCallbacks | null = null;
+
     async run(
         slug: string,
         inputVars: Record<string, unknown>,
         modelConfig: ModelConfig | null,
         callbacks: EngineCallbacks,
+        sourceConversationId?: string,
     ): Promise<RunResult> {
         this.aborted = false;
 
@@ -100,10 +152,15 @@ export class WorkflowEngine {
             workflowSlug: slug,
             resolvedVars,
             stepCount: steps.length,
+            sourceConversationId: sourceConversationId ?? null,
         });
         this.runId = run.runId;
+        this._lastCallbacks = callbacks;
 
-        return this._executeSteps(steps, run, resolvedVars, modelConfig, callbacks);
+        await this._trace('run_start', null, null, { slug, stepCount: steps.length });
+        const result = await this._executeSteps(steps, run, resolvedVars, modelConfig, callbacks);
+        await this._trace('run_complete', null, null, { status: result.status });
+        return result;
     }
 
     async resume(
@@ -113,6 +170,7 @@ export class WorkflowEngine {
     ): Promise<RunResult> {
         this.aborted = false;
         this.runId = run.runId;
+        this._lastCallbacks = callbacks;
 
         const wf = await invoke<WorkflowFile>('workflow_load', { slug: run.workflowSlug });
         const { steps } = normalizeWorkflow(wf, {});
@@ -131,6 +189,7 @@ export class WorkflowEngine {
     ): Promise<RunResult> {
         for (let i = startFrom; i < steps.length; i++) {
             if (this.aborted) {
+                await this._trace('run_cancel', i, null, { reason: 'abort' });
                 await this._finalizeRun(run.runId, 'cancelled');
                 return { status: 'cancelled', resolvedVars, runId: run.runId };
             }
@@ -140,13 +199,29 @@ export class WorkflowEngine {
 
             callbacks.onStepStatus(i, 'running');
 
-            const result = await this._executeStep(step, i, stepRun, run, resolvedVars, modelConfig, callbacks);
+            let result = await this._executeStep(step, i, stepRun, run, resolvedVars, modelConfig, callbacks);
+
+            // Handle step repair retry: reload the workflow and re-execute the step
+            if (result === 'retry') {
+                const wf = await invoke<WorkflowFile>('workflow_load', { slug: run.workflowSlug });
+                const reloaded = normalizeWorkflow(wf, resolvedVars);
+                const repairedStep = reloaded.steps[i];
+                const repairedRun = run.stepRuns[i] ?? emptyStepRun(repairedStep.id, i);
+                result = await this._executeStep(repairedStep, i, repairedRun, run, resolvedVars, modelConfig, callbacks);
+                run.stepRuns[i] = repairedRun;
+            }
+            if (result === 'retry') {
+                // Guard against infinite retry loops — fall through to failure
+                result = 'failed';
+            }
 
             if (result === 'aborted') {
+                await this._trace('run_cancel', i, null, {});
                 await this._finalizeRun(run.runId, 'cancelled');
                 return { status: 'aborted', resolvedVars, runId: run.runId };
             }
             if (result === 'failed') {
+                await this._trace('run_fail', i, null, {});
                 await this._finalizeRun(run.runId, 'failed');
                 return { status: 'failed', resolvedVars, runId: run.runId };
             }
@@ -170,29 +245,41 @@ export class WorkflowEngine {
         resolvedVars: Record<string, unknown>,
         modelConfig: ModelConfig | null,
         callbacks: EngineCallbacks,
-    ): Promise<'aborted' | 'failed' | { outputValue?: unknown }> {
+    ): Promise<'aborted' | 'failed' | 'retry' | { outputValue?: unknown }> {
 
         // ── Human actor — full pause ─────────────────────────────────────
         if (step.actor === 'human') {
             callbacks.onStepStatus(stepIndex, 'awaiting_human_input');
             if (step.humanInputs && step.humanInputs.length > 0) {
+                await this._persistGate(
+                    run.runId, 'human_input', stepIndex,
+                    step.humanPrompt ?? `Complete this step: ${step.intent}`,
+                    step.humanInputs,
+                );
                 const values = await callbacks.onHumanInputRequired(
                     step as WorkflowStepV2,
                     step.humanPrompt ?? `Complete this step: ${step.intent}`,
                     step.humanInputs,
                 );
+                await this._resolveGate(run.runId, stepIndex, 'human_input');
                 for (const [k, v] of Object.entries(values)) {
                     resolvedVars[k] = v;
                     callbacks.onVariableResolved(k, v);
                 }
             } else {
                 // No form inputs — just a human checkpoint / approval gate
+                await this._persistGate(
+                    run.runId, 'human_intervention', stepIndex,
+                    step.humanPrompt ?? `Please complete: ${step.intent}`,
+                );
                 const decision = await callbacks.onHumanInterventionRequired(
                     stepIndex,
                     step.humanPrompt ?? `Please complete: ${step.intent}`,
                 );
+                await this._resolveGate(run.runId, stepIndex, 'human_intervention');
                 if (decision === 'abort') return 'aborted';
             }
+            await this._trace('step_ok', stepIndex, null, { actor: 'human' });
             await this._checkpoint(run.runId, stepIndex, { ...stepRun, status: 'done' });
             return {};
         }
@@ -205,7 +292,14 @@ export class WorkflowEngine {
         if (risk === 'write' || risk === 'destructive') {
             callbacks.onStepStatus(stepIndex, 'verifying');
             const screenshot = await getLastScreenshot(boundParams.session_id as string | undefined);
+            await this._persistGate(
+                run.runId, 'approval', stepIndex,
+                `Approve ${risk} step: ${step.intent}`,
+                undefined,
+                { risk, screenshot },
+            );
             const approved = await callbacks.onApprovalRequired(stepIndex, risk, step.intent, screenshot);
+            await this._resolveGate(run.runId, stepIndex, 'approval');
             if (!approved) {
                 await this._checkpoint(run.runId, stepIndex, { ...stepRun, status: 'skipped' });
                 callbacks.onStepStatus(stepIndex, 'skipped');
@@ -238,18 +332,37 @@ export class WorkflowEngine {
                     startedAt: new Date().toISOString(),
                     agentReasoning: fwd.reasoning,
                     screenshotB64: fwd.screenshot,
+                    agentModel: fwd.modelId,
+                    agentUsage: fwd.usage ? {
+                        promptTokens: fwd.usage.promptTokens,
+                        completionTokens: fwd.usage.completionTokens,
+                        totalTokens: fwd.usage.totalTokens,
+                        inferenceTimeMs: fwd.inferenceTimeMs ?? 0,
+                    } : undefined,
                 });
+                await this._trace('step_ok', stepIndex, 0, { actor: 'agent', model: fwd.modelId });
+                if (fwd.recoveryActions?.length) {
+                    callbacks.onFixAvailable(stepIndex, fwd.recoveryActions, fwd.reasoning);
+                }
                 await this._checkpoint(run.runId, stepIndex, stepRun);
                 return {};
             }
 
+            await this._trace('step_fail', stepIndex, 0, { actor: 'agent', error: fwd.reasoning });
             // Agent forward failed — fall through to human intervention
+            await this._persistGate(
+                run.runId, 'human_intervention', stepIndex,
+                `Step ${stepIndex + 1} failed: ${fwd.reasoning}`,
+                undefined,
+                { agentReasoning: fwd.reasoning, screenshot: fwd.screenshot },
+            );
             const decision = await callbacks.onHumanInterventionRequired(
                 stepIndex,
                 `Step ${stepIndex + 1} failed: ${fwd.reasoning}`,
                 fwd.reasoning,
                 fwd.screenshot,
             );
+            await this._resolveGate(run.runId, stepIndex, 'human_intervention');
             if (decision === 'abort') return 'aborted';
             if (decision === 'skip') {
                 stepRun.status = 'skipped';
@@ -277,9 +390,11 @@ export class WorkflowEngine {
             };
 
             try {
+                await this._trace('tool_call', stepIndex, attempt, { tool: step.tool });
                 const result = await invoke<Record<string, unknown>>('browser_rpc', {
                     request: { method: step.tool, params: boundParams },
                 });
+                await this._trace('tool_result', stepIndex, attempt, { tool: step.tool });
 
                 // Postcondition verification
                 if (step.postcondition && step.postcondition.type !== 'none') {
@@ -289,6 +404,7 @@ export class WorkflowEngine {
                         lastError = `Postcondition not met: ${step.postcondition.type} = "${step.postcondition.value}"`;
                         attemptRecord.error = lastError;
                         stepRun.attempts.push(attemptRecord);
+                        await this._trace('step_fail', stepIndex, attempt, { error: lastError, reason: 'postcondition' });
                         await this._checkpoint(run.runId, stepIndex, stepRun);
                         continue; // retry
                     }
@@ -299,6 +415,7 @@ export class WorkflowEngine {
 
                 stepRun.status = 'done';
                 stepRun.attempts.push({ ...attemptRecord, error: undefined });
+                await this._trace('step_ok', stepIndex, attempt, { actor: 'auto' });
                 await this._checkpoint(run.runId, stepIndex, stepRun);
                 return { outputValue };
 
@@ -308,6 +425,7 @@ export class WorkflowEngine {
                 attemptRecord.error = lastError;
                 attemptRecord.screenshotB64 = lastScreenshot;
                 stepRun.attempts.push(attemptRecord);
+                await this._trace('step_fail', stepIndex, attempt, { error: lastError });
                 await this._checkpoint(run.runId, stepIndex, stepRun);
             }
         }
@@ -318,6 +436,7 @@ export class WorkflowEngine {
             callbacks.onStepStatus(stepIndex, 'agent_recovery');
             callbacks.onAgentRecoveryProgress(stepIndex, 'Agent analysing failure…');
 
+            await this._trace('recovery_start', stepIndex, null, { error: lastError });
             const sessionId = boundParams.session_id as string | undefined ?? '';
             const recovery = await agentRecoveryLoop(
                 step as WorkflowStepV2,
@@ -336,24 +455,68 @@ export class WorkflowEngine {
                     startedAt: new Date().toISOString(),
                     agentReasoning: recovery.reasoning,
                     screenshotB64: recovery.screenshot,
+                    agentModel: recovery.modelId,
+                    agentUsage: recovery.usage ? {
+                        promptTokens: recovery.usage.promptTokens,
+                        completionTokens: recovery.usage.completionTokens,
+                        totalTokens: recovery.usage.totalTokens,
+                        inferenceTimeMs: recovery.inferenceTimeMs ?? 0,
+                    } : undefined,
                 });
+                await this._trace('recovery_ok', stepIndex, null, { model: recovery.modelId });
+                if (recovery.recoveryActions?.length) {
+                    callbacks.onFixAvailable(stepIndex, recovery.recoveryActions, recovery.reasoning);
+                }
                 await this._checkpoint(run.runId, stepIndex, stepRun);
                 return {};
             }
 
+            await this._trace('recovery_fail', stepIndex, null, { error: recovery.reasoning });
             // Agent recovery failed — fall through to human
             lastError = recovery.reasoning;
             lastScreenshot = recovery.screenshot;
         }
 
+        // ── Step repair (before human intervention) ──────────────────────
+        // Offer the user a chance to fix the step definition and retry.
+        const repairedStep = await callbacks.onStepRepairRequested(
+            stepIndex, step as WorkflowStepV2, lastError, lastScreenshot,
+        );
+        if (repairedStep) {
+            // Save the repaired step to the workflow file
+            try {
+                const wf = await invoke<WorkflowFile>('workflow_load', { slug: run.workflowSlug });
+                if (isV2(wf)) {
+                    const updated: WorkflowFileV2 = {
+                        ...wf,
+                        steps: wf.steps.map((s, i) => i === stepIndex ? repairedStep : s),
+                    };
+                    await invoke('workflow_update', { definition: updated });
+                }
+            } catch (e) {
+                console.warn('[workflow-engine] repair save failed:', e);
+            }
+            // Reset step run state for retry
+            stepRun.status = 'resolving_inputs';
+            stepRun.attempts = [];
+            return 'retry' as const;
+        }
+
         // ── Human intervention ───────────────────────────────────────────
         callbacks.onStepStatus(stepIndex, 'awaiting_human_intervention');
+        await this._persistGate(
+            run.runId, 'human_intervention', stepIndex,
+            `Step ${stepIndex + 1} failed: ${lastError}`,
+            undefined,
+            { error: lastError, screenshot: lastScreenshot },
+        );
         const decision = await callbacks.onHumanInterventionRequired(
             stepIndex,
             `Step ${stepIndex + 1} failed: ${lastError}`,
             escalateTo === 'agent' ? lastError : undefined,
             lastScreenshot,
         );
+        await this._resolveGate(run.runId, stepIndex, 'human_intervention');
 
         if (decision === 'abort') return 'aborted';
         if (decision === 'skip') {
@@ -392,6 +555,43 @@ export class WorkflowEngine {
             await invoke('workflow_run_complete', { runId, status });
         } catch (e) {
             console.warn('[workflow-engine] finalize run failed:', e);
+        }
+    }
+
+    /** Clear a resolved pending gate from the database. */
+    private async _resolveGate(runId: string, stepIndex?: number, gateType?: string) {
+        try {
+            await invoke('workflow_run_resolve_gate', { runId });
+            if (stepIndex !== undefined && gateType) {
+                await this._trace('gate_resolve', stepIndex, null, { gateType });
+            }
+        } catch (e) {
+            console.warn('[workflow-engine] resolve gate failed:', e);
+        }
+    }
+
+    /** Persist a pending human gate so it survives app restart. */
+    private async _persistGate(
+        runId: string,
+        gateType: GateType,
+        stepIndex: number,
+        prompt: string,
+        inputs?: HumanInput[],
+        metadata?: Record<string, unknown>,
+    ) {
+        try {
+            const gate: PendingGate = {
+                gateType,
+                stepIndex,
+                prompt,
+                inputs,
+                metadata,
+                createdAt: new Date().toISOString(),
+            };
+            await invoke('workflow_run_pause_for_gate', { runId, gate });
+            await this._trace('gate_pause', stepIndex, null, { gateType, prompt });
+        } catch (e) {
+            console.warn('[workflow-engine] persist gate failed:', e);
         }
     }
 }

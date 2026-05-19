@@ -14,7 +14,7 @@ import {
     ChevronDown12Regular,
     ChevronUp12Regular,
 } from '@fluentui/react-icons';
-import type { StepRunStatus, ActorKind } from '@/types/workflow-types';
+import type { StepRunStatus, ActorKind, AgentUsage } from '@/types/workflow-types';
 
 interface StepRowProps {
     index: number;
@@ -30,6 +30,8 @@ interface StepRowProps {
     errorMessage?: string;
     screenshot?: string;
     observedUrl?: string;
+    agentModel?: string;
+    agentUsage?: AgentUsage;
 }
 
 const ACTOR_ICON: Record<ActorKind, React.ReactNode> = {
@@ -202,6 +204,8 @@ export function StepRow({
     errorMessage,
     screenshot,
     observedUrl,
+    agentModel,
+    agentUsage,
 }: StepRowProps) {
     const styles = useStyles();
     const [expanded, setExpanded] = useState(false);
@@ -256,6 +260,14 @@ export function StepRow({
                     <span style={{ textTransform: 'uppercase', letterSpacing: '0.04em', fontSize: '10px' }}>
                         {classification}
                     </span>
+                    {agentModel && status === 'done' && (
+                        <>
+                            <span>·</span>
+                            <span style={{ fontSize: '10px', color: tokens.colorPaletteBlueForeground2 }}>
+                                {agentUsage ? `${agentUsage.totalTokens} tok` : agentModel}
+                            </span>
+                        </>
+                    )}
                     {observedUrl && (
                         <>
                             <span>·</span>
@@ -296,6 +308,15 @@ export function StepRow({
                                 </div>
                             );
                         })}
+
+                        {/* Agent usage summary at bottom of log */}
+                        {!isActive && agentUsage && (
+                            <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, fontSize: '10px', color: tokens.colorNeutralForeground3, display: 'flex', gap: 12 }}>
+                                <span>{agentModel}</span>
+                                <span>↑{agentUsage.promptTokens} ↓{agentUsage.completionTokens} ∑{agentUsage.totalTokens} tok</span>
+                                <span>{(agentUsage.inferenceTimeMs / 1000).toFixed(1)}s</span>
+                            </div>
+                        )}
                     </div>
                 )}
 

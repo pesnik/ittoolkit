@@ -21,11 +21,13 @@ import {
     Record16Regular,
     Stop16Regular,
     Play16Regular,
+    Edit16Regular,
     Delete16Regular,
     ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
 import WorkflowRunPanel from './WorkflowRunPanel';
 import { WorkflowRecordingReview } from './WorkflowRecordingReview';
+import { WorkflowEditor } from './WorkflowEditor';
 import type { WorkflowStepV1, WorkflowFileV2, WorkflowRun } from '@/types/workflow-types';
 import type { ModelConfig } from '@/types/ai-types';
 import { useModelConfig } from '@/lib/ModelConfigContext';
@@ -122,6 +124,8 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
     const [replaying, setReplaying] = useState<{ slug: string; name: string; variables?: Record<string, unknown> } | null>(null);
     // Raw steps captured during recording — held until review dialog is dismissed
     const [pendingReview, setPendingReview] = useState<{ steps: WorkflowStepV1[]; name: string } | null>(null);
+    // Full workflow being edited in the cell editor
+    const [editing, setEditing] = useState<WorkflowFileV2 | null>(null);
 
     const refresh = useCallback(async () => {
         try {
@@ -203,6 +207,20 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
         } finally {
             setLoading(false);
         }
+    }, [refresh]);
+
+    const edit = useCallback(async (slug: string) => {
+        try {
+            const wf = await invoke<WorkflowFileV2>('workflow_load', { slug });
+            setEditing(wf);
+        } catch (e) {
+            setError(String(e));
+        }
+    }, []);
+
+    const handleEditorSaved = useCallback(async (_wf: WorkflowFileV2) => {
+        setEditing(null);
+        await refresh();
     }, [refresh]);
 
     const handleReviewSaved = useCallback(async (_wf: WorkflowFileV2) => {
@@ -328,6 +346,14 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
                             </div>
                             <Button
                                 appearance="subtle"
+                                icon={<Edit16Regular />}
+                                onClick={() => edit(wf.slug)}
+                                disabled={loading}
+                                title="Edit workflow steps"
+                                style={{ minWidth: 0 }}
+                            />
+                            <Button
+                                appearance="subtle"
                                 icon={<Play16Regular />}
                                 onClick={() => setReplaying({ slug: wf.slug, name: wf.name })}
                                 disabled={loading}
@@ -362,6 +388,14 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
                     modelConfig={modelConfig ?? null}
                     onSaved={handleReviewSaved}
                     onCancel={() => setPendingReview(null)}
+                />
+            )}
+
+            {editing && (
+                <WorkflowEditor
+                    workflow={editing}
+                    onSaved={handleEditorSaved}
+                    onCancel={() => setEditing(null)}
                 />
             )}
         </div>

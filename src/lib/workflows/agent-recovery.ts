@@ -11,9 +11,10 @@
 
 import { runInferenceWithTools } from '@/lib/ai/inference-with-tools';
 import { runInference } from '@/lib/ai/ai-service';
+import type { InferenceResponse } from '@/types/ai-types';
 import { invoke } from '@tauri-apps/api/core';
 import { ModelConfig, AIMode, MessageRole, ModelProvider } from '@/types/ai-types';
-import type { WorkflowStepV2, WorkflowRun } from '@/types/workflow-types';
+import type { WorkflowStepV2, WorkflowRun, RecoveryAction } from '@/types/workflow-types';
 import type { ToolExecutionEvent } from '@/lib/ai/inference-with-tools';
 
 function toolProgressMessage(event: ToolExecutionEvent): string {
@@ -109,6 +110,10 @@ export interface RecoveryResult {
     ok: boolean;
     reasoning: string;
     screenshot?: string;
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    inferenceTimeMs?: number;
+    modelId?: string;
+    recoveryActions?: RecoveryAction[];
 }
 
 const FORWARD_SYSTEM = `You are a workflow step executor. Complete exactly ONE step in the browser.
@@ -202,6 +207,8 @@ export async function agentForwardStep(
         },
     ];
 
+    const agentCalls: RecoveryAction[] = [];
+
     try {
         const response = await runInferenceWithTools(
             {
@@ -233,6 +240,13 @@ export async function agentForwardStep(
                 onChunk: () => {},
                 onConfirmExecution: async () => true,
                 onToolExecution: (event) => {
+                    if (event.toolName !== 'browser_observe') {
+                        agentCalls.push({
+                            tool: event.toolName,
+                            params: event.arguments,
+                            executionTimeMs: event.executionTimeMs,
+                        });
+                    }
                     const msg = toolProgressMessage(event);
                     if (msg) onProgress?.(msg);
                 },
@@ -246,12 +260,21 @@ export async function agentForwardStep(
             reasoning.toLowerCase().includes('error');
 
         const afterObs = await observeCurrentPage(sessionId);
-        return { ok: !failed, reasoning, screenshot: afterObs.screenshot };
+        return {
+            ok: !failed,
+            reasoning,
+            screenshot: afterObs.screenshot,
+            usage: response.usage,
+            inferenceTimeMs: response.inferenceTimeMs,
+            modelId: modelConfig.modelId,
+            recoveryActions: agentCalls,
+        };
     } catch (err) {
         return {
             ok: false,
             reasoning: `Agent step error: ${err instanceof Error ? err.message : String(err)}`,
             screenshot,
+            recoveryActions: agentCalls,
         };
     }
 }
@@ -322,6 +345,8 @@ export async function agentRecoveryLoop(
         },
     ];
 
+    const recoveryCalls: RecoveryAction[] = [];
+
     try {
         const response = await runInferenceWithTools(
             {
@@ -357,6 +382,13 @@ export async function agentRecoveryLoop(
                 // escalated to human by the engine before we got here.
                 onConfirmExecution: async () => true,
                 onToolExecution: (event) => {
+                    if (event.toolName !== 'browser_observe') {
+                        recoveryCalls.push({
+                            tool: event.toolName,
+                            params: event.arguments,
+                            executionTimeMs: event.executionTimeMs,
+                        });
+                    }
                     const msg = toolProgressMessage(event);
                     if (msg) onProgress?.(msg);
                 },
@@ -369,12 +401,21 @@ export async function agentRecoveryLoop(
             !reasoning.toLowerCase().includes('could not');
 
         const afterObs = await observeCurrentPage(sessionId);
-        return { ok: succeeded, reasoning, screenshot: afterObs.screenshot };
+        return {
+            ok: succeeded,
+            reasoning,
+            screenshot: afterObs.screenshot,
+            usage: response.usage,
+            inferenceTimeMs: response.inferenceTimeMs,
+            modelId: modelConfig.modelId,
+            recoveryActions: recoveryCalls,
+        };
     } catch (err) {
         return {
             ok: false,
             reasoning: `Recovery agent error: ${err instanceof Error ? err.message : String(err)}`,
             screenshot,
+            recoveryActions: recoveryCalls,
         };
     }
 }

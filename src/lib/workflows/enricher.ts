@@ -28,6 +28,8 @@ Your job:
    - "human": must pause (login forms, password fields, approval checkboxes, CAPTCHAs)
 4. Identify hardcoded values in params that should become {{ variables }} (emails, names, ticket IDs, usernames).
 5. Suggest a workflow name, description (one sentence), and goal (end state after success).
+6. For each step, provide an optional 'description' explaining what the step does and why.
+7. For each step, provide optional 'failureHints' — an array of plain-language troubleshooting tips for the user if this step fails.
 
 Rules:
 - browser_observe steps are read-only navigation aids — fold them into the surrounding act/navigate step, do not make them standalone steps.
@@ -51,8 +53,12 @@ Return this exact JSON shape:
     {
       "rawStepIndices": [0, 1, 2],
       "intent": "Navigate to the Jira service desk",
+      "description": "Explain what this step does in detail, including why it exists",
       "actor": "auto",
-      "requiresVariables": []
+      "requiresVariables": [],
+      "failureHints": [
+        "Actions the user should try if this step fails, e.g. 'Check that the Jira URL is reachable'"
+      ]
     }
   ],
   "variables": [
@@ -197,6 +203,7 @@ export function applyHintsToSteps(
         return {
             id: crypto.randomUUID(),
             intent: hint.intent,
+            description: hint.description || undefined,
             tool: raw.tool,
             params: raw.params,
             actor: hint.actor as import('@/types/workflow-types').ActorKind,
@@ -205,6 +212,7 @@ export function applyHintsToSteps(
                 maxAuto: hint.actor === 'auto' ? 2 : 1,
                 escalateTo: hint.actor === 'human' ? 'human' : 'agent',
             },
+            failureHints: hint.failureHints && hint.failureHints.length > 0 ? hint.failureHints : undefined,
             classification: raw.classification,
             observedUrl: raw.observedUrl,
             observedTitle: raw.observedTitle,

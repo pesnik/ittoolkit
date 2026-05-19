@@ -54,6 +54,25 @@ impl WorkflowDb {
                 .map_err(|e| e.to_string())?;
         }
 
+        if version < 2 {
+            // Add gate_data column — safe to ignore if it already exists
+            if let Err(e) = conn.execute_batch(
+                "ALTER TABLE workflow_runs ADD COLUMN gate_data TEXT;",
+            ) {
+                log::warn!("Migration 002 (add gate_data) skipped: {}", e);
+            }
+            conn.execute_batch("PRAGMA user_version = 2")
+                .map_err(|e| e.to_string())?;
+        }
+
+        if version < 3 {
+            if let Err(e) = conn.execute_batch(include_str!("../migrations/003_traceability.sql")) {
+                log::warn!("Migration 003 (traceability) skipped: {}", e);
+            }
+            conn.execute_batch("PRAGMA user_version = 3")
+                .map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
@@ -81,6 +100,7 @@ impl WorkflowDb {
         workflow_slug: &str,
         resolved_vars: &Value,
         step_count: usize,
+        source_conversation_id: Option<&str>,
     ) -> Result<super::workflow_recorder::WorkflowRun, String> {
         let run_id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -100,9 +120,9 @@ impl WorkflowDb {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
         conn.execute(
-            "INSERT INTO workflow_runs (run_id, workflow_slug, started_at, status, resolved_vars)
-             VALUES (?1, ?2, ?3, 'running', ?4)",
-            params![run_id, workflow_slug, now, vars_json],
+            "INSERT INTO workflow_runs (run_id, workflow_slug, started_at, status, resolved_vars, source_conversation_id)
+             VALUES (?1, ?2, ?3, 'running', ?4, ?5)",
+            params![run_id, workflow_slug, now, vars_json, source_conversation_id],
         )
         .map_err(|e| e.to_string())?;
 
@@ -130,6 +150,8 @@ impl WorkflowDb {
             step_runs,
             paused_at_step: None,
             pause_reason: None,
+            gate_data: None,
+            source_conversation_id: source_conversation_id.map(String::from),
         })
     }
 
@@ -208,6 +230,99 @@ impl WorkflowDb {
         Ok(())
     }
 
+    pub fn save_pending_gate(
+        &self,
+        run_id: &str,
+        gate: &super::workflow_recorder::PendingGate,
+    ) -> Result<(), String> {
+        let gate_json =
+            serde_json::to_string(gate).map_err(|e| format!("serialize gate: {}", e))?;
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE workflow_runs SET gate_data = ?1, status = 'paused',
+                    paused_at_step = ?2, pause_reason = ?3
+             WHERE run_id = ?4",
+            params![
+                gate_json,
+                gate.step_index as i64,
+                gate.gate_type,
+                run_id,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn clear_pending_gate(&self, run_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE workflow_runs SET gate_data = NULL, status = 'running' WHERE run_id = ?1",
+            params![run_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn insert_trace_event(&self, event: &super::workflow_recorder::InsertTraceEvent) -> Result<i64, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let data_json = serde_json::to_string(&event.event_data).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO workflow_trace_events (run_id, step_index, attempt_number, event_type, event_data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                event.run_id,
+                event.step_index,
+                event.attempt_number,
+                event.event_type,
+                data_json,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn query_trace_events(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<super::workflow_recorder::TraceEvent>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, run_id, step_index, attempt_number, event_type, event_data, created_at
+                 FROM workflow_trace_events
+                 WHERE run_id = ?1
+                 ORDER BY id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map(params![run_id], |row| {
+                let id: i64 = row.get(0)?;
+                let run_id: String = row.get(1)?;
+                let step_index: Option<i64> = row.get(2)?;
+                let attempt_number: Option<i64> = row.get(3)?;
+                let event_type: String = row.get(4)?;
+                let data_str: String = row.get(5)?;
+                let created_at: String = row.get(6)?;
+                let event_data: serde_json::Value =
+                    serde_json::from_str(&data_str).unwrap_or(serde_json::Value::Object(Default::default()));
+                Ok(super::workflow_recorder::TraceEvent {
+                    id,
+                    run_id,
+                    step_index,
+                    attempt_number,
+                    event_type,
+                    event_data,
+                    created_at,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows)
+    }
+
     pub fn complete_run(&self, run_id: &str, status: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -226,7 +341,7 @@ impl WorkflowDb {
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, workflow_slug, started_at, status, resolved_vars,
-                        paused_at_step, pause_reason
+                        paused_at_step, pause_reason, gate_data, source_conversation_id
                  FROM workflow_runs
                  WHERE status IN ('running', 'paused')
                  ORDER BY started_at DESC",
@@ -241,6 +356,8 @@ impl WorkflowDb {
             String,
             Option<i64>,
             Option<String>,
+            Option<String>,
+            Option<String>,
         )> = stmt
             .query_map([], |row| {
                 Ok((
@@ -251,6 +368,8 @@ impl WorkflowDb {
                     row.get::<_, String>(4)?,
                     row.get::<_, Option<i64>>(5)?,
                     row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             })
             .map_err(|e| e.to_string())?
@@ -258,9 +377,11 @@ impl WorkflowDb {
             .collect();
 
         let mut out = Vec::with_capacity(run_rows.len());
-        for (run_id, workflow_slug, started_at, status, vars_json, paused_step, pause_reason) in
+        for (run_id, workflow_slug, started_at, status, vars_json, paused_step, pause_reason, gate_json, source_conversation_id) in
             run_rows
         {
+            let gate_data: Option<super::workflow_recorder::PendingGate> = gate_json
+                .and_then(|g| serde_json::from_str(&g).ok());
             let resolved_vars: Value =
                 serde_json::from_str(&vars_json).unwrap_or(Value::Object(Default::default()));
 
@@ -329,6 +450,8 @@ impl WorkflowDb {
                             error: row.get(3)?,
                             screenshot_b64: screenshot,
                             agent_reasoning: row.get(4)?,
+                            agent_model: None,
+                            agent_usage: None,
                         })
                     })
                     .map_err(|e| e.to_string())?
@@ -355,6 +478,8 @@ impl WorkflowDb {
                 step_runs,
                 paused_at_step: paused_step.map(|i| i as usize),
                 pause_reason,
+                gate_data,
+                source_conversation_id,
             });
         }
 
