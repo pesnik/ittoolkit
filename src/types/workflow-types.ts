@@ -82,6 +82,7 @@ export interface WorkflowStepV2 {
   tool: string;
   params: Record<string, unknown>;
   actor: ActorKind;
+  runIf?: string;
   humanPrompt?: string;
   humanInputs?: HumanInput[];
   requiresVariables?: string[];
@@ -119,6 +120,7 @@ export interface WorkflowFileV2 {
   goal: string;
   createdAt: string;
   modelUsed?: string | null;
+  schedule?: string;
   variables: WorkflowVariable[];
   steps: WorkflowStepV2[];
 }
@@ -246,4 +248,33 @@ export interface EnrichmentHints {
   goal: string;
   steps: EnrichedStepHint[];
   variables: VariableHint[];
+}
+
+// ─── Schedule types ──────────────────────────────────────────────────────────
+
+export interface WorkflowSchedule {
+  id: number;
+  workflowSlug: string;
+  cronExpression: string;
+  variables: Record<string, unknown>;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Non-browser executor response types ──────────────────────────────────────
+
+export interface ShellExecResponse {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+}
+
+export interface HttpRequestResponse {
+  status: number;
+  statusText: string;
+  body: string;
 }

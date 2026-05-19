@@ -136,6 +136,13 @@ export default function Home() {
     };
   }, []);
 
+  // Switch to Workflows tab when a workflow run is triggered (from Activities, agent, etc.)
+  useEffect(() => {
+    const handler = () => setWorkspace('workflows');
+    window.addEventListener('workflow:run', handler);
+    return () => window.removeEventListener('workflow:run', handler);
+  }, []);
+
   const onWorkspaceChange = useCallback((_e: SelectTabEvent, data: SelectTabData) => {
     setWorkspace(data.value as Workspace);
   }, []);

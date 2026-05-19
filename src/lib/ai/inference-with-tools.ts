@@ -5,6 +5,7 @@ import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags 
 import { runtimeSettings } from '@/lib/runtimeSettings';
 import { classifyShellCommand } from './shell-classify';
 import { classifyBrowserAction, describeBrowserAction, type BrowserRisk } from './browser-classify';
+import type { HttpRequestResponse } from '@/types/workflow-types';
 
 export interface ToolExecutionEvent {
     /** Unique per call within a turn. The model can invoke the same tool
@@ -205,10 +206,25 @@ async function executeTool(
     if (normalized.name === 'get_workflow_schema') {
         return executeGetWorkflowSchema();
     }
+    if (normalized.name === 'shell.exec' || normalized.name === 'shell_exec') {
+        return executeShellCommand(normalized.arguments);
+    }
+    if (normalized.name === 'http.request' || normalized.name === 'http_request') {
+        return executeHttpRequest(normalized.arguments);
+    }
+    if (normalized.name === 'workflow.run' || normalized.name === 'workflow_run') {
+        return executeRunWorkflow(normalized.arguments);
+    }
+    if (normalized.name === 'human.gate' || normalized.name === 'human_gate') {
+        return executeHumanGate(normalized.arguments);
+    }
+    if (normalized.name === 'agent.task' || normalized.name === 'agent_task') {
+        return executeAgentTask(normalized.arguments);
+    }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "web_search" (query), "agent_action" (action, paths), "get_workflow_schema" (no arguments). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "shell.exec" (command), "http.request" (method, url), "workflow.run" (slug), "human.gate" (prompt), "agent.task" (instructions), "search_conversations" (query), "web_search" (query), "agent_action" (action, paths), "get_workflow_schema" (no arguments). Use one of these exact names.`,
             isError: true,
         };
     }
@@ -815,6 +831,91 @@ async function executeRunWorkflow(args: Record<string, unknown>): Promise<{
 
     return {
         content: `Workflow '${slug}' launched with variables: ${varSummary}. The workflow panel is now open — the user can monitor progress there. Inform the user that the workflow has started.`,
+        isError: false,
+    };
+}
+
+async function executeHttpRequest(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const method = ((args.method as string) ?? '').toUpperCase().trim();
+    const url = ((args.url as string) ?? '').trim();
+    if (!method || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        return { content: `http.request: invalid or missing "method". Must be GET, POST, PUT, PATCH, or DELETE.`, isError: true };
+    }
+    if (!url) {
+        return { content: `http.request: missing required argument "url".`, isError: true };
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        return { content: `http.request: "url" must start with http:// or https://`, isError: true };
+    }
+    try {
+        const headers = (args.headers as Record<string, string> | undefined);
+        const headerPairs: [string, string][] | undefined = headers
+            ? Object.entries(headers).map(([k, v]) => [k, v] as [string, string])
+            : undefined;
+        const body = args.body as Record<string, unknown> | undefined;
+        const timeoutSecs = (args.timeout_secs as number | undefined) ?? 30;
+
+        const result = await invoke<HttpRequestResponse>('workflow_http_request', {
+            method,
+            url,
+            headers: headerPairs ?? null,
+            body: body ?? null,
+            timeoutSecs,
+        });
+
+        const preview = result.body.length > 1000 ? result.body.slice(0, 1000) + '\n… (truncated)' : result.body;
+        return {
+            content: `HTTP ${result.status} ${result.statusText}\n\n${preview}`,
+            isError: result.status >= 400,
+        };
+    } catch (e) {
+        return { content: `http.request failed: ${e}`, isError: true };
+    }
+}
+
+async function executeHumanGate(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+    actions?: ToolResultAction[];
+}> {
+    const prompt = ((args.prompt as string) ?? '').trim();
+    if (!prompt) {
+        return { content: 'human.gate: missing required argument "prompt".', isError: true };
+    }
+    const inputs = args.inputs as Array<Record<string, unknown>> | undefined;
+    return {
+        content: `Human gate: ${prompt}`,
+        isError: false,
+        actions: [{
+            type: 'confirm_action',
+            payload: {
+                title: 'Human Task Required',
+                description: prompt,
+                items: [],
+                totalSize: 0,
+                severity: 'medium' as const,
+                actionId: `human-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                suggestedCommand: 'echo "[human gate acknowledged]"',
+                suggestedWorkingDir: '/',
+            },
+        }],
+    };
+}
+
+async function executeAgentTask(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    const instructions = ((args.instructions as string) ?? '').trim();
+    if (!instructions) {
+        return { content: 'agent.task: missing required argument "instructions".', isError: true };
+    }
+    const context = (args.context as string | undefined) ?? '';
+    return {
+        content: `Agent task delegated: ${instructions}${context ? `\nContext: ${context}` : ''}`,
         isError: false,
     };
 }

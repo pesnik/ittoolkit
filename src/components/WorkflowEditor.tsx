@@ -185,6 +185,7 @@ export function WorkflowEditor({ workflow, onSaved, onCancel }: Props) {
     const [name, setName] = useState(workflow.name);
     const [description, setDescription] = useState(workflow.description ?? '');
     const [goal, setGoal] = useState(workflow.goal ?? '');
+    const [schedule, setSchedule] = useState(workflow.schedule ?? '');
     const [steps, setSteps] = useState<WorkflowStepV2[]>(workflow.steps);
     const [variables, setVariables] = useState<WorkflowVariable[]>(workflow.variables ?? []);
     const [saving, setSaving] = useState(false);
@@ -271,6 +272,7 @@ export function WorkflowEditor({ workflow, onSaved, onCancel }: Props) {
                 slug: workflow.slug || slugify(name),
                 description: description.trim(),
                 goal: goal.trim(),
+                schedule: schedule.trim() || undefined,
                 createdAt: workflow.createdAt || new Date().toISOString(),
                 modelUsed: workflow.modelUsed ?? null,
                 variables,
@@ -284,7 +286,7 @@ export function WorkflowEditor({ workflow, onSaved, onCancel }: Props) {
         } finally {
             setSaving(false);
         }
-    }, [name, description, goal, variables, steps, workflow.slug, workflow.createdAt, workflow.modelUsed, onSaved]);
+    }, [name, description, goal, schedule, variables, steps, workflow.slug, workflow.createdAt, workflow.modelUsed, onSaved]);
 
     return (
         <div className={styles.overlay}>
@@ -317,6 +319,15 @@ export function WorkflowEditor({ workflow, onSaved, onCancel }: Props) {
                                 value={goal}
                                 onChange={(_, d) => setGoal(d.value)}
                                 placeholder="End state on success"
+                                size="small"
+                            />
+                        </div>
+                        <div className={styles.metaField} style={{ flex: 0.8 }}>
+                            <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>Schedule (cron)</Text>
+                            <Input
+                                value={schedule}
+                                onChange={(_, d) => setSchedule(d.value)}
+                                placeholder="0 2 * * *"
                                 size="small"
                             />
                         </div>

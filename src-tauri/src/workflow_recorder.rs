@@ -19,6 +19,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use tauri::{command, AppHandle, Manager};
 use tokio::fs;
@@ -72,6 +73,7 @@ pub struct WorkflowSummary {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub schedule: Option<String>,
     pub created_at: String,
     pub step_count: usize,
     pub variable_count: usize,
@@ -125,6 +127,7 @@ pub struct WorkflowStepV2 {
     pub tool: String,
     pub params: Value,
     pub actor: String, // "auto" | "agent" | "human"
+    pub run_if: Option<String>,
     pub human_prompt: Option<String>,
     pub human_inputs: Option<Vec<HumanInput>>,
     pub requires_variables: Option<Vec<String>>,
@@ -160,6 +163,7 @@ pub struct WorkflowFileV2 {
     pub goal: String,
     pub created_at: String,
     pub model_used: Option<String>,
+    pub schedule: Option<String>,
     pub variables: Vec<WorkflowVariable>,
     pub steps: Vec<WorkflowStepV2>,
 }
@@ -293,7 +297,7 @@ fn slugify(input: &str) -> String {
     out
 }
 
-fn workflows_dir() -> Result<PathBuf, String> {
+pub(crate) fn workflows_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
     Ok(home.join(WORKFLOWS_DIR))
 }
@@ -411,6 +415,7 @@ pub async fn workflow_list() -> Result<Vec<WorkflowSummary>, String> {
                 name: v2.name,
                 slug: v2.slug,
                 description: Some(v2.description),
+                schedule: v2.schedule,
                 created_at: v2.created_at,
                 step_count: v2.steps.len(),
                 variable_count: v2.variables.len(),
@@ -422,6 +427,7 @@ pub async fn workflow_list() -> Result<Vec<WorkflowSummary>, String> {
                 name: v1.name,
                 slug: v1.slug,
                 description: None,
+                schedule: None,
                 created_at: v1.created_at,
                 step_count: v1.steps.len(),
                 variable_count: v1.parameters.len(),
@@ -757,6 +763,7 @@ pub struct WorkflowSchema {
 pub struct ToolSchema {
     pub name: String,
     pub description: String,
+    pub category: String,
     pub params: Vec<ParamSchema>,
     pub supported_actors: Vec<String>,
     pub requires_open_session: bool,
@@ -796,6 +803,7 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.open".into(),
                 description: "Open a browser session. MUST be the first step in every workflow that uses browser tools.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Unique session identifier".into(), required: true, default_value: None },
                     ParamSchema { name: "headed".into(), param_type: "boolean".into(), description: "Show a visible window (vs headless)".into(), required: false, default_value: Some("false".into()) },
@@ -807,6 +815,7 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.navigate".into(),
                 description: "Navigate to a URL in an open session.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
                     ParamSchema { name: "url".into(), param_type: "string".into(), description: "Full URL to navigate to".into(), required: true, default_value: None },
@@ -818,6 +827,7 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.observe".into(),
                 description: "Capture the current page AX tree and a screenshot.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
                     ParamSchema { name: "include_screenshot".into(), param_type: "boolean".into(), description: "Include a base64 screenshot in the result".into(), required: false, default_value: Some("true".into()) },
@@ -828,6 +838,7 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.act".into(),
                 description: "Click, type, select, hover, scroll, or press a key on an element identified by AX index.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
                     ParamSchema { name: "action".into(), param_type: "string".into(), description: "What to do: click, type, select, hover, scroll, press".into(), required: true, default_value: None },
@@ -841,6 +852,7 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.extract".into(),
                 description: "Extract text content from an element by AX index or role+name.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
                     ParamSchema { name: "index".into(), param_type: "number".into(), description: "AX index of the element".into(), required: false, default_value: None },
@@ -852,11 +864,72 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             ToolSchema {
                 name: "browser.close".into(),
                 description: "Close a browser session and release resources.".into(),
+                category: "Browser".into(),
                 params: vec![
                     ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
                 ],
                 supported_actors: vec!["auto".into()],
                 requires_open_session: true,
+            },
+            // ── Non-browser tools (unified activity system) ────────────
+            ToolSchema {
+                name: "shell.exec".into(),
+                description: "Execute a shell command on the local system. Use for system administration tasks: scripts, queries, file operations.".into(),
+                category: "System".into(),
+                params: vec![
+                    ParamSchema { name: "command".into(), param_type: "string".into(), description: "The shell command to execute".into(), required: true, default_value: None },
+                    ParamSchema { name: "working_dir".into(), param_type: "string".into(), description: "Working directory for the command".into(), required: false, default_value: None },
+                    ParamSchema { name: "timeout_secs".into(), param_type: "number".into(), description: "Timeout in seconds".into(), required: false, default_value: Some("30".into()) },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: false,
+            },
+            ToolSchema {
+                name: "http.request".into(),
+                description: "Make an HTTP request to an API endpoint. Use for REST API calls, webhooks, web service interactions.".into(),
+                category: "System".into(),
+                params: vec![
+                    ParamSchema { name: "method".into(), param_type: "string".into(), description: "HTTP method: GET, POST, PUT, PATCH, DELETE".into(), required: true, default_value: None },
+                    ParamSchema { name: "url".into(), param_type: "string".into(), description: "Request URL".into(), required: true, default_value: None },
+                    ParamSchema { name: "headers".into(), param_type: "object".into(), description: "HTTP headers as key-value pairs".into(), required: false, default_value: None },
+                    ParamSchema { name: "body".into(), param_type: "object".into(), description: "Request body (JSON object)".into(), required: false, default_value: None },
+                    ParamSchema { name: "timeout_secs".into(), param_type: "number".into(), description: "Timeout in seconds".into(), required: false, default_value: Some("30".into()) },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: false,
+            },
+            ToolSchema {
+                name: "workflow.run".into(),
+                description: "Run another saved workflow/activity by slug. Use for composing multi-step activities from reusable workflows.".into(),
+                category: "Composition".into(),
+                params: vec![
+                    ParamSchema { name: "slug".into(), param_type: "string".into(), description: "Slug of the workflow/activity to run".into(), required: true, default_value: None },
+                    ParamSchema { name: "variables".into(), param_type: "object".into(), description: "Variable overrides passed to the child workflow".into(), required: false, default_value: None },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: false,
+            },
+            ToolSchema {
+                name: "human.gate".into(),
+                description: "Pause execution for human interaction: review, confirmation, manual steps. Use when the automation needs judgement or physical-world action.".into(),
+                category: "Human".into(),
+                params: vec![
+                    ParamSchema { name: "prompt".into(), param_type: "string".into(), description: "Instructions for the human — what to do or review".into(), required: true, default_value: None },
+                    ParamSchema { name: "inputs".into(), param_type: "array".into(), description: "Structured form fields: [{name, label, type, required}]".into(), required: false, default_value: None },
+                ],
+                supported_actors: vec!["human".into()],
+                requires_open_session: false,
+            },
+            ToolSchema {
+                name: "agent.task".into(),
+                description: "Delegate an open-ended task to the AI agent. Use when the next action depends on reading, reasoning, or deciding based on previous results.".into(),
+                category: "Human".into(),
+                params: vec![
+                    ParamSchema { name: "instructions".into(), param_type: "string".into(), description: "What the agent should do — plain language task description".into(), required: true, default_value: None },
+                    ParamSchema { name: "context".into(), param_type: "string".into(), description: "Optional context from previous steps".into(), required: false, default_value: None },
+                ],
+                supported_actors: vec!["agent".into()],
+                requires_open_session: false,
             },
         ],
         actor_types: vec![
@@ -886,6 +959,295 @@ pub async fn get_workflow_schema() -> WorkflowSchema {
             SchemaEntry { name: "none".into(), description: "No postcondition verification.".into() },
         ],
     }
+}
+
+// ── Schedule data types (Phase 1) ───────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowSchedule {
+    pub id: i64,
+    pub workflow_slug: String,
+    pub cron_expression: String,
+    pub variables: Value,
+    pub enabled: bool,
+    pub last_run_at: Option<String>,
+    pub next_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellExecResponse {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRequestResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub body: String,
+}
+
+// ── Non-browser executor commands (Agent Harness Phase 1) ──
+
+/// Execute a shell command for a workflow step. Unlike execute_command,
+/// this bypasses the interactive security gate (the user already approved
+/// the workflow). Returns stdout, stderr, and exit code.
+#[command]
+pub async fn workflow_shell_exec(
+    command: String,
+    working_dir: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<ShellExecResponse, String> {
+    let cmd = command.trim().to_string();
+    if cmd.is_empty() {
+        return Err("shell.exec: command cannot be empty".into());
+    }
+
+    let work_dir = match working_dir {
+        Some(ref d) if !d.is_empty() => std::path::PathBuf::from(d),
+        _ => dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?,
+    };
+
+    let timeout_duration = std::time::Duration::from_secs(
+        timeout_secs.unwrap_or(30).min(300),
+    );
+
+    let child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .current_dir(&work_dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn command: {}", e))?;
+
+    let child = std::sync::Arc::new(tokio::sync::Mutex::new(Some(child)));
+    let child_for_task = child.clone();
+
+    let result = tokio::time::timeout(timeout_duration, async move {
+        let mut guard = child_for_task.lock().await;
+        let child_opt = guard.as_mut()
+            .ok_or_else(|| "Child process unavailable".to_string())?;
+
+        let mut child_stdout = child_opt.stdout.take();
+        let mut child_stderr = child_opt.stderr.take();
+
+        let status = child_opt
+            .wait()
+            .await
+            .map_err(|e| format!("Failed to wait for command: {}", e))?;
+
+        let mut stdout = String::new();
+        if let Some(out) = child_stdout.as_mut() {
+            tokio::io::AsyncReadExt::read_to_string(out, &mut stdout).await.ok();
+        }
+
+        let mut stderr = String::new();
+        if let Some(err) = child_stderr.as_mut() {
+            tokio::io::AsyncReadExt::read_to_string(err, &mut stderr).await.ok();
+        }
+
+        let exit_code = status.code().unwrap_or(-1);
+
+        Ok::<_, String>(ShellExecResponse {
+            stdout: if stdout.len() > 10_000 {
+                format!("{}\n\n... (output truncated)", &stdout[..10_000])
+            } else { stdout },
+            stderr: if stderr.len() > 10_000 {
+                format!("{}\n\n... (output truncated)", &stderr[..10_000])
+            } else { stderr },
+            exit_code,
+            timed_out: false,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            let mut guard = child.lock().await;
+            if let Some(c) = guard.as_mut() {
+                let _ = c.kill().await;
+                let _ = c.wait().await;
+            }
+            Ok(ShellExecResponse {
+                stdout: String::new(),
+                stderr: format!("Command timed out after {:?}", timeout_duration),
+                exit_code: -1,
+                timed_out: true,
+            })
+        }
+    }
+}
+
+/// Make an HTTP request from a workflow step. Uses reqwest (already in deps).
+#[command]
+pub async fn workflow_http_request(
+    method: String,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+    body: Option<Value>,
+    timeout_secs: Option<u64>,
+) -> Result<HttpRequestResponse, String> {
+    let method_upper = method.to_uppercase();
+    let http_method = match method_upper.as_str() {
+        "GET" => reqwest::Method::GET,
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "PATCH" => reqwest::Method::PATCH,
+        "DELETE" => reqwest::Method::DELETE,
+        _ => return Err(format!("http.request: invalid method '{}'", method)),
+    };
+
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("http.request: url must start with http:// or https://".into());
+    }
+
+    let timeout_duration = std::time::Duration::from_secs(
+        timeout_secs.unwrap_or(30).min(120),
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(timeout_duration)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let mut req = client.request(http_method, &url);
+
+    if let Some(ref h) = headers {
+        for (key, val) in h {
+            req = req.header(key.as_str(), val.as_str());
+        }
+    }
+
+    // Default Content-Type for JSON body
+    if body.is_some() && headers.as_ref().map_or(true, |h| !h.iter().any(|(k, _)| k.to_lowercase() == "content-type")) {
+        req = req.header("Content-Type", "application/json");
+    }
+
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+
+    let response = req.send().await.map_err(|e| {
+        if e.is_timeout() {
+            format!("http.request: request timed out after {:?}", timeout_duration)
+        } else if e.is_connect() {
+            format!("http.request: connection failed: {}", e)
+        } else {
+            format!("http.request: request failed: {}", e)
+        }
+    })?;
+
+    let status = response.status();
+    let status_text = status.canonical_reason().unwrap_or("Unknown").to_string();
+    let body_bytes = response.bytes().await.map_err(|e| format!("http.request: failed to read response body: {}", e))?;
+    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    let body = if body_str.len() > 50_000 {
+        format!("{}\n\n... (response truncated, {} total bytes)", &body_str[..50_000], body_bytes.len())
+    } else { body_str };
+
+    Ok(HttpRequestResponse {
+        status: status.as_u16(),
+        status_text,
+        body,
+    })
+}
+
+// ── Schedule management commands ────────────────────────────
+
+#[command]
+pub async fn workflow_schedule_set(
+    workflow_slug: String,
+    cron_expression: String,
+    variables: Option<Value>,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<(), String> {
+    // Validate cron expression before saving
+    cron::Schedule::from_str(&cron_expression)
+        .map_err(|e| format!("Invalid cron expression '{}': {}", cron_expression, e))?;
+    db.set_schedule(&workflow_slug, &cron_expression, &variables.unwrap_or(Value::Object(Default::default())))?;
+
+    // Also update the schedule field in the workflow JSON file
+    let dir = workflows_dir()?;
+    let path = dir.join(format!("{}.workflow.json", &workflow_slug));
+    if path.exists() {
+        let content = tokio::fs::read_to_string(&path).await
+            .map_err(|e| format!("Failed to read workflow file: {}", e))?;
+        let mut wf: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse workflow: {}", e))?;
+        if let Some(obj) = wf.as_object_mut() {
+            if cron_expression.is_empty() {
+                obj.remove("schedule");
+            } else {
+                obj.insert("schedule".into(), Value::String(cron_expression.clone()));
+            }
+        }
+        let new_content = serde_json::to_string_pretty(&wf)
+            .map_err(|e| format!("Failed to serialize workflow: {}", e))?;
+        atomic_write(&path, &new_content).await?;
+    }
+
+    Ok(())
+}
+
+#[command]
+pub async fn workflow_schedule_get(
+    workflow_slug: String,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<Option<WorkflowSchedule>, String> {
+    db.get_schedule(&workflow_slug)
+}
+
+#[command]
+pub async fn workflow_schedule_list(
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<Vec<WorkflowSchedule>, String> {
+    db.list_schedules()
+}
+
+#[command]
+pub async fn workflow_schedule_delete(
+    workflow_slug: String,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<(), String> {
+    db.delete_schedule(&workflow_slug)?;
+
+    // Remove the schedule field from the workflow JSON file
+    let dir = workflows_dir()?;
+    let path = dir.join(format!("{}.workflow.json", &workflow_slug));
+    if path.exists() {
+        let content = tokio::fs::read_to_string(&path).await
+            .map_err(|e| format!("Failed to read workflow file: {}", e))?;
+        let mut wf: Value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse workflow: {}", e))?;
+        if let Some(obj) = wf.as_object_mut() {
+            obj.remove("schedule");
+        }
+        let new_content = serde_json::to_string_pretty(&wf)
+            .map_err(|e| format!("Failed to serialize workflow: {}", e))?;
+        atomic_write(&path, &new_content).await?;
+    }
+
+    Ok(())
+}
+
+#[command]
+pub async fn workflow_schedule_toggle(
+    workflow_slug: String,
+    enabled: bool,
+    db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
+) -> Result<(), String> {
+    db.toggle_schedule(&workflow_slug, enabled)
 }
 
 #[cfg(test)]

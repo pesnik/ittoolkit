@@ -468,6 +468,95 @@ const GET_WORKFLOW_SCHEMA_TOOL: Tool = {
     },
 };
 
+// Native function calling tool: execute a shell command on the local system.
+const SHELL_EXEC_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'shell.exec',
+        description: `Execute a shell command on the local system. Use for system administration, scripts, file operations, and queries. Returns stdout, stderr, and exit code.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                command: { type: 'string', description: 'The shell command to execute.' },
+                working_dir: { type: 'string', description: 'Working directory (absolute path). Defaults to home directory.' },
+                timeout_secs: { type: 'number', description: 'Timeout in seconds (default 30, max 300).' },
+            },
+            required: ['command'],
+        },
+    },
+};
+
+// Native function calling tool: make an HTTP request to a REST API.
+const HTTP_REQUEST_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'http.request',
+        description: `Make an HTTP request to a REST API, webhook, or web service. Use for Jira API, Slack webhooks, M365 Graph API, etc. Returns status code and response body.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                method: { type: 'string', description: 'HTTP method: GET, POST, PUT, PATCH, DELETE.' },
+                url: { type: 'string', description: 'Request URL (http:// or https:// only).' },
+                headers: { type: 'object', description: 'HTTP headers as key-value pairs.' },
+                body: { type: 'object', description: 'Request body as JSON object.' },
+                timeout_secs: { type: 'number', description: 'Timeout in seconds (default 30).' },
+            },
+            required: ['method', 'url'],
+        },
+    },
+};
+
+// Native function calling tool: run another saved workflow by slug.
+const WORKFLOW_RUN_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'workflow.run',
+        description: `Run another saved workflow or activity by slug. Use for composing multi-step activities from reusable workflows. Launches the child workflow and returns confirmation.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                slug: { type: 'string', description: 'Slug of the workflow/activity to run.' },
+                variables: { type: 'object', description: 'Variable overrides for the child workflow.' },
+            },
+            required: ['slug'],
+        },
+    },
+};
+
+// Native function calling tool: pause for human interaction.
+const HUMAN_GATE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'human.gate',
+        description: `Pause execution for human interaction. Use when the automation needs the user to review, confirm, or perform a physical-world action. The app shows a dialog; execution resumes when the user confirms.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                prompt: { type: 'string', description: 'Instructions for the human — what to do or review.' },
+                inputs: { type: 'array', description: 'Optional structured form fields: [{name, label, type, required}].' },
+            },
+            required: ['prompt'],
+        },
+    },
+};
+
+// Native function calling tool: delegate an open-ended task to the AI.
+const AGENT_TASK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'agent.task',
+        description: `Delegate an open-ended task to the AI agent. Use when the next step depends on reading, reasoning, or deciding based on previous results — e.g. "Parse the command output and extract device names". The agent returns its findings as a tool response.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                instructions: { type: 'string', description: 'What the agent should do — plain language task description.' },
+                context: { type: 'string', description: 'Optional context from previous steps or notes.' },
+            },
+            required: ['instructions'],
+        },
+    },
+};
+
 // Known models registry. `contextWindow` is the model's stated context window
 // in tokens; the memory module uses it to size the summarization threshold and
 // history trim budget.
@@ -734,7 +823,10 @@ export async function runInference(
         !request.suppressTools &&
         [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)
     ) {
-        const tools: Tool[] = [EXECUTE_COMMAND_TOOL, AGENT_ACTION_TOOL, GET_WORKFLOW_SCHEMA_TOOL];
+        const tools: Tool[] = [
+            EXECUTE_COMMAND_TOOL, AGENT_ACTION_TOOL, GET_WORKFLOW_SCHEMA_TOOL,
+            SHELL_EXEC_TOOL, HTTP_REQUEST_TOOL, WORKFLOW_RUN_TOOL, HUMAN_GATE_TOOL, AGENT_TASK_TOOL,
+        ];
         if (featureFlags.memoryCrossConversationSearch) {
             tools.push(SEARCH_CONVERSATIONS_TOOL);
         }
@@ -951,6 +1043,33 @@ Arguments: session_id (required), action ("click" | "type" | "select" | "scroll"
 ### browser_close
 Releases the Chromium resources. Always call this when finished with a session.
 Arguments: session_id (required).
+
+### shell.exec
+Execute a shell command on the local system. Use for system administration, scripts, file operations, queries.
+Arguments: command (string, required), working_dir (string, optional, defaults to home), timeout_secs (number, optional, default 30).
+Returns: { stdout, stderr, exit_code }.
+Security: read/write classification applies via the same gate as execute_command.
+
+### http.request
+Make an HTTP request to a REST API, webhook, or web service. Use for Jira API, Slack webhooks, M365 Graph API, etc.
+Arguments: method (string, required: GET/POST/PUT/PATCH/DELETE), url (string, required), headers (object, optional), body (object, optional for write methods), timeout_secs (number, optional, default 30).
+Returns: { status, statusText, body }.
+Security: URLs starting with http:// or https:// only.
+
+### workflow.run
+Run another saved workflow or activity by slug. Use for composing multi-step activities from reusable workflows.
+Arguments: slug (string, required), variables (object, optional — overrides for the child workflow).
+Returns: confirmation that the child workflow has been launched.
+
+### human.gate
+Pause execution for human interaction. Use when the automation needs the user to review, confirm, or perform a physical-world action.
+Arguments: prompt (string, required — what the human should do), inputs (array, optional — structured form fields [{name, label, type, required}]).
+The app shows a dialog; execution resumes when the user confirms.
+
+### agent.task
+Delegate an open-ended task to the AI agent. Use when the next step depends on reading, reasoning, or deciding based on previous results — e.g. "Parse the command output and extract device names".
+Arguments: instructions (string, required — what to do), context (string, optional — prior step output or notes).
+The agent returns the result as a tool response.
 
 USAGE PATTERN:
   1. browser_open {"session_id":"main"}

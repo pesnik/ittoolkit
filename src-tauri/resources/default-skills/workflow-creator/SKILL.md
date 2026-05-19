@@ -10,6 +10,11 @@ allowed-tools:
   - browser_navigate
   - browser_observe
   - browser_close
+  - shell_exec
+  - http_request
+  - workflow_run
+  - get_workflow_schema
+  - agent_action
 profile: ephemeral
 ---
 
@@ -70,13 +75,20 @@ get_workflow_schema {}
 
 Use the returned schema to construct valid workflow JSON. The schema includes:
 - `available_tools` — each with name, description, params (name, type, required), and supported actors
+  - **Browser**: browser.open, browser.navigate, browser.observe, browser.act, browser.extract, browser.close
+  - **System**: shell.exec (run shell commands), http.request (REST API calls)
+  - **Composition**: workflow.run (run another workflow/activity by slug)
+  - **Human**: human.gate (pause for manual work), agent.task (delegate to AI)
 - `actor_types` — auto, agent, human with descriptions of when to use each
 - `variable_sources` — human_input, conversation_context, literal, step_output
 - `classifications` — read, write, destructive
 - `retry_config` — maxAuto range (0-10) and escalateTo options
 - `postcondition_types` — url_pattern, selector_exists, text_contains, none
 
+Every step can also have `runIf` — an optional condition string (e.g. `"{{task-verify.result == 'needs_patch'}}"`). When present, the step only executes if the expression evaluates to truthy.
+
 The top-level workflow structure is always:
+- `schedule` — optional cron expression for scheduled execution (e.g. `"0 2 * * 0"` for weekly)
 ```json
 {
   "version": 2,
@@ -264,6 +276,98 @@ Use for:
 }
 ```
 
+### shell.exec — run a shell command on the local system
+
+```json
+{
+  "id": "step-run-command",
+  "intent": "Run a diagnostic command to check disk usage",
+  "tool": "shell.exec",
+  "params": { "command": "df -h /", "working_dir": "/", "timeout_secs": 15 },
+  "actor": "auto",
+  "classification": "read",
+  "retry": { "maxAuto": 1, "escalateTo": "human" }
+}
+```
+
+For multi-line or complex commands, keep the command string as a single line with `&&` or `;` chaining. The `working_dir` parameter defaults to the home directory. The system reports stdout, stderr, and exit code.
+
+### http.request — make a REST API call
+
+```json
+{
+  "id": "step-slack-webhook",
+  "intent": "Post an alert message to Slack via incoming webhook",
+  "tool": "http.request",
+  "params": {
+    "method": "POST",
+    "url": "{{ webhook_url }}",
+    "headers": { "Content-Type": "application/json" },
+    "body": { "text": "{{ alert_message }}", "channel": "{{ channel_name }}" },
+    "timeout_secs": 30
+  },
+  "actor": "auto",
+  "classification": "write",
+  "retry": { "maxAuto": 2, "escalateTo": "human" }
+}
+```
+
+Use for: Jira REST API, Slack webhooks, M365 Graph API, any internal HTTP service. Supported methods: GET, POST, PUT, PATCH, DELETE. The response body is available for postcondition checks or variable extraction.
+
+### workflow.run — compose reusable sub-workflows
+
+```json
+{
+  "id": "step-run-child",
+  "intent": "Run the Okta unlock workflow as a sub-step",
+  "tool": "workflow.run",
+  "params": { "slug": "okta-unlock-user", "variables": { "user_email": "{{ user_email }}" } },
+  "actor": "auto",
+  "classification": "write",
+  "retry": { "maxAuto": 1, "escalateTo": "human" }
+}
+```
+
+Use to compose multi-step activities from smaller, reusable workflows. The child workflow runs with its own run state; its completion status is reported back.
+
+### human.gate — pause for user interaction
+
+```json
+{
+  "id": "step-ask-user",
+  "intent": "Ask the user to confirm before proceeding",
+  "tool": "human.gate",
+  "params": {
+    "prompt": "Please confirm that the alert is accurate before sending.",
+    "inputs": [{ "name": "approved", "label": "I confirm this alert is accurate", "type": "checkbox", "required": true }]
+  },
+  "actor": "human",
+  "classification": "read",
+  "retry": { "maxAuto": 0, "escalateTo": "human" }
+}
+```
+
+The app shows a dialog with the prompt and any form inputs. Execution waits for the user to fill in and confirm. Use for: review-before-submit, physical-world checks, gathering user judgement.
+
+### agent.task — delegate reasoning to the AI
+
+```json
+{
+  "id": "step-parse-output",
+  "intent": "Parse the command output to extract error counts",
+  "tool": "agent.task",
+  "params": {
+    "instructions": "Parse the stdout from the previous step and extract all lines containing 'ERROR'. Count them and report the total.",
+    "context": "The previous step ran a log analysis script."
+  },
+  "actor": "agent",
+  "classification": "read",
+  "retry": { "maxAuto": 1, "escalateTo": "human" }
+}
+```
+
+Use when the next step depends on reading, reasoning, or deciding based on previous results. The AI processes the instructions and returns its findings. Results are available as step output for downstream variable binding.
+
 ### Close the session when done
 
 ```json
@@ -377,25 +481,72 @@ agent_action {
 
 ---
 
-## 12. Editing an existing workflow
+## 11. Creating scheduled activities
 
-To read an existing workflow before editing:
+An **activity** is a workflow with a `schedule` (cron expression). Activities run automatically on a timer — no user interaction required. They are useful for:
+
+- **Periodic health checks** — run a shell script or HTTP check every 15 minutes
+- **Daily reports** — generate and send a message at 8am weekdays
+- **Scheduled maintenance** — run cleanup tasks weekly on Sunday
+
+### Setting a schedule
+
+Add a `schedule` field at the top level of the workflow JSON:
+
+```json
+{
+  "version": 2,
+  "name": "Weekly health check",
+  "slug": "weekly-health-check",
+  "schedule": "0 8 * * 1",
+  ...
+}
+```
+
+The cron expression follows standard format: `minute hour day-of-month month day-of-week`.
+
+You can also guide the user to set the schedule via the **Schedule** button (clock icon) on each workflow row in the Workflows panel, or by typing a cron expression into the **Schedule (cron)** field in the WorkflowEditor.
+
+### Best practices for activities
+
+1. **Use `shell.exec` and `http.request`** — activities often run headlessly without a browser. Prefer API calls over browser navigation where possible.
+2. **Minimal `human` actor steps** — if a scheduled activity hits a `human.gate`, it pauses until the user notices and responds. Prefer `auto` or `agent` with appropriate retry policies.
+3. **Set appropriate retry** — scheduled activities that fail should retry enough times to handle transient failures but not so many that they pile up. `maxAuto: 2` is a good default.
+4. **Include a `postcondition`** on critical steps so failures are detected and the activity is marked as "broken."
+5. **Use `workflow.run` for composition** — compose complex activities from simpler building-block workflows.
+
+### When to use an activity vs a one-shot workflow
+
+| Use a one-shot workflow | Use a scheduled activity |
+|------------------------|------------------------|
+| On-demand user-initiated task | Recurring maintenance task |
+| Browser-heavy interaction | API/shell-based automation |
+| Requires human input each run | Fully automated, no human needed |
+| User wants to review before execution | User wants "fire and forget" |
+
+---
+
+## 13. Editing an existing workflow
+
+To read an existing workflow, use `get_workflow_schema` for tool reference, then call `workflow_load` to get the full workflow:
 
 ```
-execute_command { cmd: "cat ~/.ittoolkit/workflows/<slug>.workflow.json", working_dir: "/" }
+get_workflow_schema {}
 ```
 
-To list all saved workflows:
+To list workflows, read from disk:
 
 ```
 execute_command { cmd: "ls ~/.ittoolkit/workflows/", working_dir: "/" }
 ```
 
-Apply targeted edits and overwrite the file. The Workflows panel reloads from disk each time it's opened.
+After reviewing the workflow JSON, make your edits and emit an updated `workflow_card` — just like creating a new workflow. The user can test individual steps and accept the new version.
+
+Do **NOT** overwrite workflow files via shell commands — always use the `workflow_card` agent_action so the user can review, test, and approve changes.
 
 ---
 
-## 13. Worked example — "Send a Slack message to a channel"
+## 14. Worked example — "Send a Slack message to a channel"
 
 **User says:** "Can you make a workflow to send an alert to our Slack #incidents channel?"
 
@@ -417,7 +568,7 @@ Apply targeted edits and overwrite the file. The Workflows panel reloads from di
 
 ---
 
-## 14. Platform-Specific Learnings (from real-world sessions)
+## 15. Platform-Specific Learnings (from real-world sessions)
 
 These are hard-won lessons from running live automations. Apply them in every workflow you design.
 

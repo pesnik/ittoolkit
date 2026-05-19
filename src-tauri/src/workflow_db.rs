@@ -73,6 +73,14 @@ impl WorkflowDb {
                 .map_err(|e| e.to_string())?;
         }
 
+        if version < 4 {
+            if let Err(e) = conn.execute_batch(include_str!("../migrations/004_schedules.sql")) {
+                log::warn!("Migration 004 (schedules) skipped: {}", e);
+            }
+            conn.execute_batch("PRAGMA user_version = 4")
+                .map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
@@ -328,6 +336,182 @@ impl WorkflowDb {
         conn.execute(
             "UPDATE workflow_runs SET status = ?1 WHERE run_id = ?2",
             params![status, run_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── schedule management ────────────────────────────────────────────
+
+    pub fn set_schedule(
+        &self,
+        workflow_slug: &str,
+        cron_expression: &str,
+        variables: &Value,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let vars_json = Self::vars_serialized(variables)?;
+        conn.execute(
+            "INSERT INTO workflow_schedules (workflow_slug, cron_expression, variables, next_run_at)
+             VALUES (?1, ?2, ?3, datetime('now'))
+             ON CONFLICT(workflow_slug) DO UPDATE SET
+               cron_expression = excluded.cron_expression,
+               variables       = excluded.variables,
+               updated_at      = datetime('now')",
+            params![workflow_slug, cron_expression, vars_json],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_schedule(
+        &self,
+        workflow_slug: &str,
+    ) -> Result<Option<super::workflow_recorder::WorkflowSchedule>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, workflow_slug, cron_expression, variables, enabled,
+                        last_run_at, next_run_at, created_at, updated_at
+                 FROM workflow_schedules
+                 WHERE workflow_slug = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<super::workflow_recorder::WorkflowSchedule> = stmt
+            .query_map(params![workflow_slug], |row| {
+                let vars_str: String = row.get(3)?;
+                let vars: Value = serde_json::from_str(&vars_str).unwrap_or(Value::Object(Default::default()));
+                let enabled_int: i32 = row.get(4)?;
+                Ok(super::workflow_recorder::WorkflowSchedule {
+                    id: row.get(0)?,
+                    workflow_slug: row.get(1)?,
+                    cron_expression: row.get(2)?,
+                    variables: vars,
+                    enabled: enabled_int != 0,
+                    last_run_at: row.get(5)?,
+                    next_run_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows.into_iter().next())
+    }
+
+    pub fn list_schedules(
+        &self,
+    ) -> Result<Vec<super::workflow_recorder::WorkflowSchedule>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, workflow_slug, cron_expression, variables, enabled,
+                        last_run_at, next_run_at, created_at, updated_at
+                 FROM workflow_schedules
+                 ORDER BY workflow_slug",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<super::workflow_recorder::WorkflowSchedule> = stmt
+            .query_map([], |row| {
+                let vars_str: String = row.get(3)?;
+                let vars: Value = serde_json::from_str(&vars_str).unwrap_or(Value::Object(Default::default()));
+                let enabled_int: i32 = row.get(4)?;
+                Ok(super::workflow_recorder::WorkflowSchedule {
+                    id: row.get(0)?,
+                    workflow_slug: row.get(1)?,
+                    cron_expression: row.get(2)?,
+                    variables: vars,
+                    enabled: enabled_int != 0,
+                    last_run_at: row.get(5)?,
+                    next_run_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows)
+    }
+
+    pub fn delete_schedule(&self, workflow_slug: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM workflow_schedules WHERE workflow_slug = ?1",
+            params![workflow_slug],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn toggle_schedule(&self, workflow_slug: &str, enabled: bool) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE workflow_schedules SET enabled = ?1, updated_at = datetime('now') WHERE workflow_slug = ?2",
+            params![enabled as i32, workflow_slug],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Return all enabled schedules whose next_run_at is in the past (or NULL).
+    /// The caller updates next_run_at after launching each run.
+    pub fn due_schedules(&self) -> Result<Vec<super::workflow_recorder::WorkflowSchedule>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, workflow_slug, cron_expression, variables, enabled,
+                        last_run_at, next_run_at, created_at, updated_at
+                 FROM workflow_schedules
+                 WHERE enabled = 1
+                   AND (next_run_at IS NULL OR next_run_at <= datetime('now'))
+                 ORDER BY next_run_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<super::workflow_recorder::WorkflowSchedule> = stmt
+            .query_map([], |row| {
+                let vars_str: String = row.get(3)?;
+                let vars: Value = serde_json::from_str(&vars_str).unwrap_or(Value::Object(Default::default()));
+                let enabled_int: i32 = row.get(4)?;
+                Ok(super::workflow_recorder::WorkflowSchedule {
+                    id: row.get(0)?,
+                    workflow_slug: row.get(1)?,
+                    cron_expression: row.get(2)?,
+                    variables: vars,
+                    enabled: enabled_int != 0,
+                    last_run_at: row.get(5)?,
+                    next_run_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(rows)
+    }
+
+    /// Mark a schedule as having been run (update last_run_at and next_run_at).
+    pub fn mark_schedule_run(
+        &self,
+        schedule_id: i64,
+        next_run_at: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE workflow_schedules
+             SET last_run_at = datetime('now'),
+                 next_run_at = ?1,
+                 updated_at  = datetime('now')
+             WHERE id = ?2",
+            params![next_run_at, schedule_id],
         )
         .map_err(|e| e.to_string())?;
         Ok(())

@@ -15,6 +15,7 @@ import {
     Input,
     Spinner,
     Badge,
+    Switch,
 } from '@fluentui/react-components';
 import {
     Warning20Regular,
@@ -24,11 +25,13 @@ import {
     Edit16Regular,
     Delete16Regular,
     ArrowClockwise16Regular,
+    Clock20Regular,
 } from '@fluentui/react-icons';
 import WorkflowRunPanel from './WorkflowRunPanel';
 import { WorkflowRecordingReview } from './WorkflowRecordingReview';
 import { WorkflowEditor } from './WorkflowEditor';
-import type { WorkflowStepV1, WorkflowFileV2, WorkflowRun } from '@/types/workflow-types';
+import { SchedulePanel } from './SchedulePanel';
+import type { WorkflowStepV1, WorkflowFileV2, WorkflowRun, WorkflowSchedule } from '@/types/workflow-types';
 import type { ModelConfig } from '@/types/ai-types';
 import { useModelConfig } from '@/lib/ModelConfigContext';
 
@@ -36,6 +39,7 @@ interface WorkflowSummary {
     name: string;
     slug: string;
     description?: string;
+    schedule?: string;
     createdAt: string;
     stepCount: number;
     variableCount: number;
@@ -127,16 +131,23 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
     // Full workflow being edited in the cell editor
     const [editing, setEditing] = useState<WorkflowFileV2 | null>(null);
 
+    // Schedule management + filter
+    const [schedules, setSchedules] = useState<Map<string, WorkflowSchedule>>(new Map());
+    const [schedulePanelSlug, setSchedulePanelSlug] = useState<string | null>(null);
+    const [filterScheduled, setFilterScheduled] = useState(false);
+
     const refresh = useCallback(async () => {
         try {
-            const [rows, recordingStatus, runs] = await Promise.all([
+            const [rows, recordingStatus, runs, scheds] = await Promise.all([
                 invoke<WorkflowSummary[]>('workflow_list'),
                 invoke<RecordingStatus | null>('workflow_recording_status'),
                 invoke<WorkflowRun[]>('workflow_run_list_incomplete'),
+                invoke<WorkflowSchedule[]>('workflow_schedule_list'),
             ]);
             setList(rows);
             setStatus(recordingStatus);
             setIncompleteRuns(runs);
+            setSchedules(new Map(scheds.map(s => [s.workflowSlug, s])));
         } catch (e) {
             setError(String(e));
         }
@@ -228,6 +239,17 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
         await refresh();
     }, [refresh]);
 
+    const toggleSchedule = useCallback(async (slug: string, current: WorkflowSchedule | undefined) => {
+        if (!current) return;
+        const newEnabled = !current.enabled;
+        await invoke('workflow_schedule_toggle', { workflowSlug: slug, enabled: newEnabled });
+        setSchedules(prev => {
+            const next = new Map(prev);
+            next.set(slug, { ...current, enabled: newEnabled });
+            return next;
+        });
+    }, []);
+
     return (
         <div className={styles.root}>
             <div className={styles.header}>
@@ -277,6 +299,25 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
             </div>
 
             <div className={styles.list}>
+                {/* Filter toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 6px' }}>
+                    <Button
+                        size="small"
+                        appearance={!filterScheduled ? 'primary' : 'subtle'}
+                        onClick={() => setFilterScheduled(false)}
+                    >
+                        All
+                    </Button>
+                    <Button
+                        size="small"
+                        appearance={filterScheduled ? 'primary' : 'subtle'}
+                        onClick={() => setFilterScheduled(true)}
+                        icon={<Clock20Regular />}
+                    >
+                        Scheduled
+                    </Button>
+                </div>
+
                 {/* Incomplete runs — show at the top so user can resume */}
                 {incompleteRuns.length > 0 && (
                     <>
@@ -324,50 +365,79 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
                         </Text>
                     </div>
                 ) : (
-                    list.map((wf) => (
-                        <div key={wf.slug} className={styles.row}>
-                            <div className={styles.rowInfo}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <Text weight="semibold">{wf.name}</Text>
-                                    {wf.version === 2 && (
-                                        <Badge appearance="tint" color="brand" size="small">v2</Badge>
+                    list
+                        .filter(wf => !filterScheduled || wf.schedule)
+                        .map((wf) => {
+                        const sched = schedules.get(wf.slug);
+                        const hasIncompleteRun = incompleteRuns.some(r => r.workflowSlug === wf.slug);
+                        return (
+                            <div key={wf.slug} className={styles.row}>
+                                <div className={styles.rowInfo}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Text weight="semibold">{wf.name}</Text>
+                                        {wf.version === 2 && (
+                                            <Badge appearance="tint" color="brand" size="small">v2</Badge>
+                                        )}
+                                        {hasIncompleteRun && (
+                                            <Badge appearance="filled" color="warning" size="small">running</Badge>
+                                        )}
+                                        {sched && sched.enabled && (
+                                            <Badge appearance="outline" color="brand" size="small" icon={<Clock20Regular />}>scheduled</Badge>
+                                        )}
+                                    </div>
+                                    {wf.description && (
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+                                            {wf.description}
+                                        </Text>
                                     )}
-                                </div>
-                                {wf.description && (
-                                    <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
-                                        {wf.description}
+                                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                        {wf.stepCount} step{wf.stepCount === 1 ? '' : 's'}
+                                        {wf.variableCount > 0 ? ` · ${wf.variableCount} variable${wf.variableCount === 1 ? '' : 's'}` : ''}
+                                        {' · '}{wf.createdAt.slice(0, 10)}
+                                        {sched?.nextRunAt && sched.enabled ? ` · next: ${new Date(sched.nextRunAt).toLocaleDateString()}` : ''}
                                     </Text>
+                                </div>
+                                {sched && (
+                                    <Switch
+                                        checked={sched.enabled}
+                                        onChange={() => toggleSchedule(wf.slug, sched)}
+                                        label={sched.enabled ? 'On' : 'Off'}
+                                        style={{ minWidth: 60 }}
+                                    />
                                 )}
-                                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                                    {wf.stepCount} step{wf.stepCount === 1 ? '' : 's'}
-                                    {wf.variableCount > 0 ? ` · ${wf.variableCount} variable${wf.variableCount === 1 ? '' : 's'}` : ''}
-                                    {' · '}{wf.createdAt.slice(0, 10)}
-                                </Text>
+                                <Button
+                                    appearance="subtle"
+                                    icon={<Edit16Regular />}
+                                    onClick={() => edit(wf.slug)}
+                                    disabled={loading}
+                                    title="Edit workflow steps"
+                                    style={{ minWidth: 0 }}
+                                />
+                                <Button
+                                    appearance="subtle"
+                                    icon={<Clock20Regular />}
+                                    onClick={() => setSchedulePanelSlug(wf.slug)}
+                                    disabled={loading}
+                                    title={sched ? 'Edit schedule' : 'Add schedule'}
+                                    style={{ minWidth: 0 }}
+                                />
+                                <Button
+                                    appearance="subtle"
+                                    icon={<Play16Regular />}
+                                    onClick={() => setReplaying({ slug: wf.slug, name: wf.name })}
+                                    disabled={loading}
+                                >
+                                    Run
+                                </Button>
+                                <Button
+                                    appearance="subtle"
+                                    icon={<Delete16Regular />}
+                                    onClick={() => remove(wf.slug)}
+                                    disabled={loading}
+                                />
                             </div>
-                            <Button
-                                appearance="subtle"
-                                icon={<Edit16Regular />}
-                                onClick={() => edit(wf.slug)}
-                                disabled={loading}
-                                title="Edit workflow steps"
-                                style={{ minWidth: 0 }}
-                            />
-                            <Button
-                                appearance="subtle"
-                                icon={<Play16Regular />}
-                                onClick={() => setReplaying({ slug: wf.slug, name: wf.name })}
-                                disabled={loading}
-                            >
-                                Run
-                            </Button>
-                            <Button
-                                appearance="subtle"
-                                icon={<Delete16Regular />}
-                                onClick={() => remove(wf.slug)}
-                                disabled={loading}
-                            />
-                        </div>
-                    ))
+                        );
+                    })
                 )}
             </div>
 
@@ -396,6 +466,15 @@ export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
                     workflow={editing}
                     onSaved={handleEditorSaved}
                     onCancel={() => setEditing(null)}
+                />
+            )}
+
+            {schedulePanelSlug && (
+                <SchedulePanel
+                    workflowSlug={schedulePanelSlug}
+                    workflowName={list.find(w => w.slug === schedulePanelSlug)?.name ?? schedulePanelSlug}
+                    open={true}
+                    onClose={() => { setSchedulePanelSlug(null); refresh(); }}
                 />
             )}
         </div>

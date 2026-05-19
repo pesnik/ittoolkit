@@ -31,6 +31,8 @@ import type {
     GateType,
     TraceEvent,
     RecoveryAction,
+    ShellExecResponse,
+    HttpRequestResponse,
 } from '@/types/workflow-types';
 import { isV2 } from '@/types/workflow-types';
 import { classifyBrowserAction, type BrowserRisk } from '@/lib/ai/browser-classify';
@@ -133,6 +135,83 @@ export class WorkflowEngine {
     }
 
     private _lastCallbacks: EngineCallbacks | null = null;
+
+    /**
+     * Dispatch a tool call to the appropriate backend command based on tool name.
+     * Browser tools → browser_rpc, system tools → dedicated Tauri commands.
+     */
+    private async _executeToolCall(
+        tool: string,
+        params: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+        if (tool.startsWith('browser.')) {
+            return await invoke<Record<string, unknown>>('browser_rpc', {
+                request: { method: tool, params },
+            });
+        }
+
+        switch (tool) {
+            case 'shell.exec':
+                return await invoke<ShellExecResponse>('workflow_shell_exec', {
+                    command: params.command as string,
+                    workingDir: params.working_dir as string | undefined,
+                    timeoutSecs: params.timeout_secs as number | undefined,
+                }) as unknown as Record<string, unknown>;
+
+            case 'http.request':
+                return await invoke<HttpRequestResponse>('workflow_http_request', {
+                    method: params.method as string,
+                    url: params.url as string,
+                    headers: params.headers as Array<[string, string]> | undefined,
+                    body: params.body as Record<string, unknown> | undefined,
+                    timeoutSecs: params.timeout_secs as number | undefined,
+                }) as unknown as Record<string, unknown>;
+
+            case 'workflow.run': {
+                const slug = params.slug as string;
+                const variables = params.variables as Record<string, unknown> | undefined;
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('workflow:run', {
+                        detail: { slug, variables: variables ?? {} },
+                    }));
+                }
+                return { launched: true, slug };
+            }
+
+            case 'human.gate': {
+                const prompt = params.prompt as string;
+                const inputs = params.inputs as Array<{ name: string; label: string; type: string }> | undefined;
+                if (this._lastCallbacks?.onHumanInputRequired) {
+                    const values = await this._lastCallbacks.onHumanInputRequired(
+                        { tool, params } as unknown as WorkflowStepV2,
+                        prompt,
+                        (inputs ?? []).map(i => ({
+                            name: i.name,
+                            label: i.label,
+                            type: (i.type || 'text') as HumanInput['type'],
+                            required: true,
+                        })),
+                    );
+                    return { confirmed: true, values };
+                }
+                return { confirmed: true };
+            }
+
+            case 'agent.task': {
+                const instructions = params.instructions as string;
+                const context = params.context as string | undefined;
+                return {
+                    delegated: true,
+                    instructions,
+                    context,
+                    note: 'Agent task logged. The agent will process this in the next inference cycle.',
+                };
+            }
+
+            default:
+                throw new Error(`Unknown tool "${tool}" in workflow step`);
+        }
+    }
 
     async run(
         slug: string,
@@ -391,9 +470,7 @@ export class WorkflowEngine {
 
             try {
                 await this._trace('tool_call', stepIndex, attempt, { tool: step.tool });
-                const result = await invoke<Record<string, unknown>>('browser_rpc', {
-                    request: { method: step.tool, params: boundParams },
-                });
+                const result = await this._executeToolCall(step.tool, boundParams);
                 await this._trace('tool_result', stepIndex, attempt, { tool: step.tool });
 
                 // Postcondition verification

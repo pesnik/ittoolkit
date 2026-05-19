@@ -10,6 +10,9 @@ import {
     Input,
     Textarea,
     Select,
+    Dropdown,
+    Option,
+    OptionGroup,
     Button,
 } from '@fluentui/react-components';
 import {
@@ -21,6 +24,7 @@ import {
     Person16Regular,
 } from '@fluentui/react-icons';
 import type { WorkflowStepV2, ActorKind, RetryPolicy, Postcondition } from '@/types/workflow-types';
+import { useAvailableTools, type ToolInfo } from '@/lib/workflows/use-available-tools';
 
 interface StepCellProps {
     step: WorkflowStepV2;
@@ -152,6 +156,7 @@ const useStyles = makeStyles({
 export function StepCell({ step, index, onChange, onRemove }: StepCellProps) {
     const styles = useStyles();
     const [expanded, setExpanded] = useState(false);
+    const { toolsByCategory } = useAvailableTools();
 
     const {
         attributes,
@@ -229,6 +234,22 @@ export function StepCell({ step, index, onChange, onRemove }: StepCellProps) {
                         size="small"
                         style={{ flex: 1, minWidth: 0 }}
                     />
+                    <Dropdown
+                        size="small"
+                        placeholder="Pick tool…"
+                        style={{ width: '140px', flexShrink: 0 }}
+                        onOptionSelect={(_, data) => {
+                            if (data.optionValue) update({ tool: data.optionValue });
+                        }}
+                    >
+                        {toolsByCategory.map(group => (
+                            <OptionGroup key={group.category} label={group.category}>
+                                {group.tools.map(t => (
+                                    <Option key={t.name} value={t.name}>{t.name}</Option>
+                                ))}
+                            </OptionGroup>
+                        ))}
+                    </Dropdown>
                     <span style={{ color: tokens.colorNeutralForeground3, fontSize: '11px' }}>
                         {step.classification}
                     </span>

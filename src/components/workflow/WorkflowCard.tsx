@@ -16,6 +16,7 @@ import {
   Edit20Regular,
   Beaker20Regular,
   Dismiss20Regular,
+  Clock20Regular,
 } from '@fluentui/react-icons';
 import type { WorkflowFileV2, WorkflowStepV2 } from '@/types/workflow-types';
 
@@ -154,11 +155,36 @@ export function WorkflowCard({ workflow, onAccept, onEdit, onDismiss }: Workflow
     setTestingIndex(index);
     setError(null);
     try {
-      const method = step.tool;
+      const tool = step.tool;
       const params = step.params ?? {};
-      const result = await invoke<unknown>('browser_rpc', {
-        request: { method, params },
-      });
+      let result: unknown;
+
+      if (tool.startsWith('browser.')) {
+        result = await invoke<unknown>('browser_rpc', { request: { method: tool, params } });
+      } else if (tool === 'shell.exec') {
+        result = await invoke<unknown>('workflow_shell_exec', {
+          command: params.command as string,
+          workingDir: params.working_dir as string | undefined,
+          timeoutSecs: params.timeout_secs as number | undefined,
+        });
+      } else if (tool === 'http.request') {
+        result = await invoke<unknown>('workflow_http_request', {
+          method: params.method as string,
+          url: params.url as string,
+          headers: params.headers as Array<[string, string]> | undefined,
+          body: params.body as Record<string, unknown> | undefined,
+          timeoutSecs: params.timeout_secs as number | undefined,
+        });
+      } else if (tool === 'workflow.run') {
+        result = { launched: true, slug: params.slug };
+      } else if (tool === 'human.gate') {
+        result = { confirmed: true, note: 'Gate tested — user would see a prompt dialog.' };
+      } else if (tool === 'agent.task') {
+        result = { delegated: true, note: 'Agent task logged — would be processed in next inference cycle.' };
+      } else {
+        throw new Error(`Unknown tool: ${tool}`);
+      }
+
       setTestResults((prev) => ({
         ...prev,
         [index]: { ok: true, text: JSON.stringify(result, null, 2).slice(0, 500) },
@@ -181,10 +207,16 @@ export function WorkflowCard({ workflow, onAccept, onEdit, onDismiss }: Workflow
         <div className={styles.headerLeft}>
           <Text weight="semibold" size={300}>{workflow.name}</Text>
           <Badge size="small" appearance="tint">v{workflow.version}</Badge>
+          {workflow.schedule && (
+            <Badge size="small" appearance="outline" color="brand" icon={<Clock20Regular />}>
+              scheduled
+            </Badge>
+          )}
         </div>
         <Text size={100} className={styles.metaRow}>
           {stepCount} step{stepCount !== 1 ? 's' : ''}
           {workflow.variables?.length > 0 ? ` · ${workflow.variables.length} variable${workflow.variables.length !== 1 ? 's' : ''}` : ''}
+          {workflow.schedule ? ` · cron: ${workflow.schedule}` : ''}
         </Text>
       </div>
 

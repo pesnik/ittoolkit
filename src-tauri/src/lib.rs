@@ -20,6 +20,7 @@ mod workflow_recorder;
 mod workflow_db;
 mod web_search;
 
+use std::str::FromStr;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,6 +48,92 @@ pub fn run() {
         }
         Err(e) => log::error!("Failed to initialize workflow database: {}", e),
       }
+
+      // Start background scheduler — checks due workflows every 60 seconds
+      let handle = app.handle().clone();
+      tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await; // skip first immediate tick
+
+        loop {
+          interval.tick().await;
+
+          let db = match handle.try_state::<workflow_db::WorkflowDb>() {
+            Some(d) => d,
+            None => {
+              log::warn!("[scheduler] WorkflowDb not available yet");
+              continue;
+            }
+          };
+
+          let schedules = match db.due_schedules() {
+            Ok(s) => s,
+            Err(e) => {
+              log::error!("[scheduler] failed to query due schedules: {}", e);
+              continue;
+            }
+          };
+
+          for sched in schedules {
+            log::info!("[scheduler] running workflow '{}' (cron: {})", sched.workflow_slug, sched.cron_expression);
+
+            // Validate workflow file
+            let wf_path = match workflow_recorder::workflows_dir() {
+              Ok(dir) => dir.join(format!("{}.workflow.json", &sched.workflow_slug)),
+              Err(e) => {
+                log::error!("[scheduler] cannot resolve workflows dir: {}", e);
+                continue;
+              }
+            };
+
+            if !wf_path.exists() {
+              log::warn!("[scheduler] workflow '{}' not found at {}", sched.workflow_slug, wf_path.display());
+              continue;
+            }
+
+            // Count steps
+            let step_count = match tokio::fs::read_to_string(&wf_path).await {
+              Ok(content) => serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|v| v.get("steps")?.as_array().map(|a| a.len()))
+                .unwrap_or(0),
+              Err(e) => {
+                log::error!("[scheduler] failed to read workflow '{}': {}", sched.workflow_slug, e);
+                continue;
+              }
+            };
+
+            match db.create_run(&sched.workflow_slug, &sched.variables, step_count, None) {
+              Ok(run) => {
+                log::info!("[scheduler] created run {} for '{}'", run.run_id, sched.workflow_slug);
+
+                // Compute next occurrence from cron expression
+                let next = cron::Schedule::from_str(&sched.cron_expression)
+                  .ok()
+                  .and_then(|parsed| {
+                    parsed.upcoming(chrono::Utc).next()
+                  })
+                  .map(|t| t.to_rfc3339());
+
+                match next {
+                  Some(ref next_str) if !next_str.is_empty() => {
+                    db.mark_schedule_run(sched.id, next_str).ok();
+                  }
+                  _ => {
+                    log::warn!("[scheduler] cron '{}' has no future occurrences, disabling", sched.cron_expression);
+                    db.toggle_schedule(&sched.workflow_slug, false).ok();
+                    db.mark_schedule_run(sched.id, "").ok();
+                  }
+                }
+              }
+              Err(e) => {
+                log::error!("[scheduler] failed to create run for '{}': {}", sched.workflow_slug, e);
+              }
+            }
+          }
+        }
+      });
+
       Ok(())
     })
     .manage(ai_commands::InferenceState::default())
@@ -150,8 +237,17 @@ pub fn run() {
         workflow_recorder::workflow_run_resolve_gate,
         workflow_recorder::workflow_run_complete,
         workflow_recorder::workflow_run_list_incomplete,
-        workflow_recorder::workflow_trace_event_insert,
-        workflow_recorder::workflow_trace_events_list,
+    workflow_recorder::workflow_trace_event_insert,
+    workflow_recorder::workflow_trace_events_list,
+    // Non-browser executors
+    workflow_recorder::workflow_shell_exec,
+    workflow_recorder::workflow_http_request,
+    // Schedule management
+    workflow_recorder::workflow_schedule_set,
+    workflow_recorder::workflow_schedule_get,
+    workflow_recorder::workflow_schedule_list,
+    workflow_recorder::workflow_schedule_delete,
+    workflow_recorder::workflow_schedule_toggle,
         // Browser capability gate (M5: per-skill URL allowlist)
         browser_capability::browser_set_capabilities,
         browser_capability::browser_clear_capabilities,
