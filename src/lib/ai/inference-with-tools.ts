@@ -202,10 +202,13 @@ async function executeTool(
     if (normalized.name.startsWith('browser_')) {
         return executeBrowserTool(normalized.name, normalized.arguments);
     }
+    if (normalized.name === 'get_workflow_schema') {
+        return executeGetWorkflowSchema();
+    }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "web_search" (query), "agent_action" (action, paths). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "search_conversations" (query, limit), "web_search" (query), "agent_action" (action, paths), "get_workflow_schema" (no arguments). Use one of these exact names.`,
             isError: true,
         };
     }
@@ -693,6 +696,18 @@ async function executeShellCommand(args: Record<string, unknown>): Promise<{
     }
 
     return { content, isError };
+}
+
+async function executeGetWorkflowSchema(): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    try {
+        const schema = await invoke<unknown>('get_workflow_schema');
+        return { content: JSON.stringify(schema, null, 2), isError: false };
+    } catch (e) {
+        return { content: `get_workflow_schema failed: ${e}`, isError: true };
+    }
 }
 
 interface SearchConversationsHit {

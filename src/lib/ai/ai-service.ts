@@ -452,6 +452,22 @@ const SEARCH_CONVERSATIONS_TOOL: Tool = {
     },
 };
 
+// Native function calling tool: fetch the current workflow schema definition.
+// Use this before creating or editing a workflow to get the latest available
+// tools, actor types, variable sources, retry config, and postcondition types.
+const GET_WORKFLOW_SCHEMA_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'get_workflow_schema',
+        description: `Fetch the current workflow schema definition. Returns the latest available tools (browser.open, browser.navigate, browser.observe, browser.act, browser.extract, browser.close) with their params, actor types (auto/agent/human), variable sources (human_input/conversation_context/literal/step_output), retry configuration, and postcondition types. Use this before creating or editing any workflow to ensure valid JSON structure.`,
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+        },
+    },
+};
+
 // Known models registry. `contextWindow` is the model's stated context window
 // in tokens; the memory module uses it to size the summarization threshold and
 // history trim budget.
@@ -718,7 +734,7 @@ export async function runInference(
         !request.suppressTools &&
         [ModelProvider.LlamaCpp, ModelProvider.OpenAICompatible].includes(request.modelConfig.provider)
     ) {
-        const tools: Tool[] = [EXECUTE_COMMAND_TOOL, AGENT_ACTION_TOOL];
+        const tools: Tool[] = [EXECUTE_COMMAND_TOOL, AGENT_ACTION_TOOL, GET_WORKFLOW_SCHEMA_TOOL];
         if (featureFlags.memoryCrossConversationSearch) {
             tools.push(SEARCH_CONVERSATIONS_TOOL);
         }
@@ -928,6 +944,10 @@ Returns: confirmation that the workflow panel has been opened.
 
 Use to run IT tasks like "create a Jira ticket", "unlock Okta account", "reset M365 password" when a matching workflow exists.
 List available workflows first: execute_command { cmd: "ls ~/.ittoolkit/workflows/", working_dir: "/" }
+
+### get_workflow_schema
+Fetch the current workflow schema definition. Use this BEFORE creating or editing a workflow to get the latest available tools, actor types, variable sources, retry configuration, and postcondition types.
+No arguments required. Returns a JSON schema object.
 
 ### Human-interaction detection — automatic headed upgrade
 

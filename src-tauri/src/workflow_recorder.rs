@@ -729,6 +729,156 @@ pub fn seed_default_workflows(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Schema introspection (Agent Harness Phase A) ─────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowSchema {
+    pub version: u32,
+    pub available_tools: Vec<ToolSchema>,
+    pub actor_types: Vec<SchemaEntry>,
+    pub variable_sources: Vec<SchemaEntry>,
+    pub classifications: Vec<SchemaEntry>,
+    pub retry_config: RetryConfigSchema,
+    pub postcondition_types: Vec<SchemaEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSchema {
+    pub name: String,
+    pub description: String,
+    pub params: Vec<ParamSchema>,
+    pub supported_actors: Vec<String>,
+    pub requires_open_session: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParamSchema {
+    pub name: String,
+    pub param_type: String,
+    pub description: String,
+    pub required: bool,
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaEntry {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryConfigSchema {
+    pub max_auto_range: (u32, u32),
+    pub escalate_to: Vec<String>,
+}
+
+/// Return the current workflow schema for the agent to reference at runtime.
+/// Replaces the hardcoded schema section in SKILL.md — always up to date.
+#[command]
+pub async fn get_workflow_schema() -> WorkflowSchema {
+    WorkflowSchema {
+        version: 2,
+        available_tools: vec![
+            ToolSchema {
+                name: "browser.open".into(),
+                description: "Open a browser session. MUST be the first step in every workflow that uses browser tools.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Unique session identifier".into(), required: true, default_value: None },
+                    ParamSchema { name: "headed".into(), param_type: "boolean".into(), description: "Show a visible window (vs headless)".into(), required: false, default_value: Some("false".into()) },
+                    ParamSchema { name: "profile".into(), param_type: "string".into(), description: "ephemeral (no cookies survive) or persistent (cookies saved)".into(), required: false, default_value: Some("ephemeral".into()) },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: false,
+            },
+            ToolSchema {
+                name: "browser.navigate".into(),
+                description: "Navigate to a URL in an open session.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
+                    ParamSchema { name: "url".into(), param_type: "string".into(), description: "Full URL to navigate to".into(), required: true, default_value: None },
+                    ParamSchema { name: "wait_until".into(), param_type: "string".into(), description: "When to consider navigation complete: load, domcontentloaded, networkidle".into(), required: false, default_value: Some("load".into()) },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: true,
+            },
+            ToolSchema {
+                name: "browser.observe".into(),
+                description: "Capture the current page AX tree and a screenshot.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
+                    ParamSchema { name: "include_screenshot".into(), param_type: "boolean".into(), description: "Include a base64 screenshot in the result".into(), required: false, default_value: Some("true".into()) },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into(), "human".into()],
+                requires_open_session: true,
+            },
+            ToolSchema {
+                name: "browser.act".into(),
+                description: "Click, type, select, hover, scroll, or press a key on an element identified by AX index.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
+                    ParamSchema { name: "action".into(), param_type: "string".into(), description: "What to do: click, type, select, hover, scroll, press".into(), required: true, default_value: None },
+                    ParamSchema { name: "index".into(), param_type: "number".into(), description: "AX index of the element (ignored for actor=agent, which re-observes live)".into(), required: false, default_value: None },
+                    ParamSchema { name: "text".into(), param_type: "string".into(), description: "Text to type or key to press (e.g. Enter)".into(), required: false, default_value: None },
+                    ParamSchema { name: "submit".into(), param_type: "boolean".into(), description: "Submit the form after typing".into(), required: false, default_value: None },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: true,
+            },
+            ToolSchema {
+                name: "browser.extract".into(),
+                description: "Extract text content from an element by AX index or role+name.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
+                    ParamSchema { name: "index".into(), param_type: "number".into(), description: "AX index of the element".into(), required: false, default_value: None },
+                    ParamSchema { name: "attribute".into(), param_type: "string".into(), description: "Attribute to extract (e.g. href, data-id)".into(), required: false, default_value: None },
+                ],
+                supported_actors: vec!["auto".into(), "agent".into()],
+                requires_open_session: true,
+            },
+            ToolSchema {
+                name: "browser.close".into(),
+                description: "Close a browser session and release resources.".into(),
+                params: vec![
+                    ParamSchema { name: "session_id".into(), param_type: "string".into(), description: "Session identifier".into(), required: true, default_value: None },
+                ],
+                supported_actors: vec!["auto".into()],
+                requires_open_session: true,
+            },
+        ],
+        actor_types: vec![
+            SchemaEntry { name: "auto".into(), description: "Deterministic execution — no LLM. Retries up to maxAuto times on failure.".into() },
+            SchemaEntry { name: "agent".into(), description: "AI reads the live page and decides how to act. Use when element indices or values are not known in advance.".into() },
+            SchemaEntry { name: "human".into(), description: "Pauses execution and waits for the user to act in the browser or fill a form. Use for login, MFA, review-before-submit.".into() },
+        ],
+        variable_sources: vec![
+            SchemaEntry { name: "human_input".into(), description: "User fills it in the Run panel before starting. Use for values the automation cannot guess.".into() },
+            SchemaEntry { name: "conversation_context".into(), description: "Agent infers from the chat conversation. Use for things the user already mentioned.".into() },
+            SchemaEntry { name: "literal".into(), description: "Fixed value, never changes.".into() },
+            SchemaEntry { name: "step_output".into(), description: "Produced by an earlier step (e.g. ticket ID extracted from URL).".into() },
+        ],
+        classifications: vec![
+            SchemaEntry { name: "read".into(), description: "Only reads or observes — no state change. No approval required.".into() },
+            SchemaEntry { name: "write".into(), description: "Creates, updates, posts, submits — changes state. Requires user approval.".into() },
+            SchemaEntry { name: "destructive".into(), description: "Deletes, resets, removes access. Requires red-highlighted approval.".into() },
+        ],
+        retry_config: RetryConfigSchema {
+            max_auto_range: (0, 10),
+            escalate_to: vec!["agent".into(), "human".into(), "abort".into()],
+        },
+        postcondition_types: vec![
+            SchemaEntry { name: "url_pattern".into(), description: "Match the current URL against a regex pattern.".into() },
+            SchemaEntry { name: "selector_exists".into(), description: "Check if an element matching a CSS selector exists in the DOM.".into() },
+            SchemaEntry { name: "text_contains".into(), description: "Check if the page body contains a specific text string.".into() },
+            SchemaEntry { name: "none".into(), description: "No postcondition verification.".into() },
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

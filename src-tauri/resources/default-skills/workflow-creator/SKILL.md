@@ -60,12 +60,23 @@ execute_command { cmd: "cat ~/.ittoolkit/skills/browser-sites/<hostname>/SKILL.m
 
 ---
 
-## 3. The v2 Workflow Schema — reference
+## 3. The v2 Workflow Schema — dynamic reference
 
-Every workflow is a JSON file at `~/.ittoolkit/workflows/<slug>.workflow.json`.
+The workflow schema is not hardcoded here. **Before creating or editing a workflow, always call `get_workflow_schema` to get the current schema definition.** This returns the latest available tools, actor types, variable sources, retry configuration, and postcondition types as a JSON object.
 
-### Top-level structure
+```
+get_workflow_schema {}
+```
 
+Use the returned schema to construct valid workflow JSON. The schema includes:
+- `available_tools` — each with name, description, params (name, type, required), and supported actors
+- `actor_types` — auto, agent, human with descriptions of when to use each
+- `variable_sources` — human_input, conversation_context, literal, step_output
+- `classifications` — read, write, destructive
+- `retry_config` — maxAuto range (0-10) and escalateTo options
+- `postcondition_types` — url_pattern, selector_exists, text_contains, none
+
+The top-level workflow structure is always:
 ```json
 {
   "version": 2,
@@ -80,56 +91,7 @@ Every workflow is a JSON file at `~/.ittoolkit/workflows/<slug>.workflow.json`.
 }
 ```
 
-### Variables
-
-Each variable has a `source` that controls how its value is resolved at runtime:
-
-| source | meaning | example |
-|--------|---------|---------|
-| `human_input` | User fills it in the Run panel before clicking Run | Jira base URL, Okta domain |
-| `conversation_context` | Agent infers the value from the chat conversation | ticket summary, alert message, affected user email |
-| `literal` | Fixed value, never changes | `"true"`, `"Medium"`, `"it-alerts"` |
-| `step_output` | Produced by an earlier step (e.g. ticket ID extracted from URL) | `ticket_id` |
-
-**`defaultValue`** — if provided, the field is optional in the Run panel (user can leave it blank). If empty string `""`, the field is required.
-
-```json
-{
-  "name": "user_email",
-  "type": "string",
-  "source": "conversation_context",
-  "description": "Email of the user to unlock (from the conversation)",
-  "defaultValue": ""
-}
-```
-
 Variable values are substituted into step params using `{{ variable_name }}` template syntax.
-
-### Steps
-
-Each step has this structure:
-
-```json
-{
-  "id": "step-unique-id",
-  "intent": "Plain-language description of what this step does and why",
-  "tool": "browser.open | browser.navigate | browser.observe | browser.act | browser.extract | browser.close",
-  "params": { ... tool-specific params ... },
-  "actor": "auto | agent | human",
-  "classification": "read | write | destructive",
-  "requiresVariables": ["var_name"],
-  "retry": {
-    "maxAuto": 2,
-    "escalateTo": "agent | human",
-    "agentHint": "Extra context for the agent if this step fails — what to look for, alternatives to try."
-  },
-  "postcondition": {
-    "type": "url_pattern | selector_exists | text_contains | none",
-    "value": "string to match",
-    "timeoutMs": 10000
-  }
-}
-```
 
 ---
 
@@ -349,6 +311,7 @@ When in doubt, use `"write"` for any step that sends data or changes state.
 
 Before writing the JSON, verify:
 
+- [ ] Called `get_workflow_schema` to get the current schema before constructing steps
 - [ ] First step is `browser.open` with `profile: "persistent"` for sites requiring login
 - [ ] Every `browser.act` step where the exact element is unknown has `actor: "agent"` with a descriptive `agentHint`
 - [ ] There is a `human` review step before any `write` or `destructive` submit action
@@ -360,6 +323,12 @@ Before writing the JSON, verify:
 ---
 
 ## 9. Saving the workflow
+
+Before writing, fetch the current schema to make sure you use valid tool names and params:
+
+```
+get_workflow_schema {}
+```
 
 Write the finished JSON to the workflows directory and confirm it appeared in the panel:
 

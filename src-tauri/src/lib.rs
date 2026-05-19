@@ -137,6 +137,7 @@ pub fn run() {
         workflow_recorder::workflow_recording_stop,
         workflow_recorder::workflow_recording_status,
         workflow_recorder::workflow_recording_finalize,
+        workflow_recorder::get_workflow_schema,
         workflow_recorder::workflow_list,
         workflow_recorder::workflow_load,
         workflow_recorder::workflow_delete,
