@@ -309,7 +309,7 @@ When in doubt, use `"write"` for any step that sends data or changes state.
 
 ## 8. Designing a good workflow — checklist
 
-Before writing the JSON, verify:
+Before emitting the `workflow_card`, verify:
 
 - [ ] Called `get_workflow_schema` to get the current schema before constructing steps
 - [ ] First step is `browser.open` with `profile: "persistent"` for sites requiring login
@@ -322,37 +322,62 @@ Before writing the JSON, verify:
 
 ---
 
-## 9. Saving the workflow
+## 9. Presenting the workflow to the user
 
-Before writing, fetch the current schema to make sure you use valid tool names and params:
-
-```
-get_workflow_schema {}
-```
-
-Write the finished JSON to the workflows directory and confirm it appeared in the panel:
+After designing all steps, do NOT write the JSON to disk via execute_command. Instead, emit a `workflow_card` agent_action — this renders an interactive card in the chat where the user can review steps, test individual steps, and save with one click.
 
 ```
-execute_command {
-  cmd: "cat > ~/.ittoolkit/workflows/<slug>.workflow.json << 'WORKFLOW_EOF'\n<full JSON here>\nWORKFLOW_EOF",
-  working_dir: "/"
+agent_action {
+  "action": "workflow_card",
+  "workflow": {
+    "version": 2,
+    "name": "...",
+    "slug": "...",
+    "description": "...",
+    "goal": "...",
+    "createdAt": "2026-01-01T00:00:00Z",
+    "modelUsed": null,
+    "variables": [ ... ],
+    "steps": [ ... ]
+  }
 }
 ```
 
-Or use a Python one-liner to avoid shell quoting issues with complex JSON:
+The card shows step-by-step preview with actor badges, allows testing individual steps (via the beaker button), and displays the result inline. The user can:
+- **Accept** — saves the workflow via the backend (no shell needed)
+- **Edit** — opens the WorkflowEditor for refinement
+- **Test** — runs any step and shows pass/fail inline
 
-```
-execute_command {
-  cmd: "python3 -c \"import json; open('/Users/$USER/.ittoolkit/workflows/<slug>.workflow.json','w').write(json.dumps(<dict>, indent=2))\"",
-  working_dir: "/"
-}
-```
-
-After saving, tell the user: "Your workflow **[name]** has been saved. Open the **Workflows** panel and you'll see it listed. Click **Run** to launch it."
+After the user accepts, tell them: "Your workflow **[name]** has been saved. Open the **Workflows** panel and you'll see it listed. Click **Run** to launch it."
 
 ---
 
-## 10. Editing an existing workflow
+## 10. Iterative test-fix loop
+
+The workflow_card lets the user test individual steps. If a test fails, the user may comment on the failure. Follow this loop:
+
+1. User reports a test failure (e.g. "step 3 failed — the selector is wrong for the Create button")
+2. Understand the failure and fix the relevant step(s)
+3. Call `get_workflow_schema {}` again if you need to check tool params
+4. Emit an **updated** `workflow_card` with the fixed steps:
+
+```
+agent_action {
+  "action": "workflow_card",
+  "workflow": {
+    ...same structure, fixed steps...
+  }
+}
+```
+
+5. The new card replaces the old one — the user can test again immediately
+6. Repeat until all steps pass and the user clicks Accept
+
+**Never save partial workflows** via shell commands. Always use `workflow_card` — the user clicks Accept only when everything works.
+
+---
+
+## 12. Editing an existing workflow
 
 To read an existing workflow before editing:
 
@@ -370,7 +395,7 @@ Apply targeted edits and overwrite the file. The Workflows panel reloads from di
 
 ---
 
-## 11. Worked example — "Send a Slack message to a channel"
+## 13. Worked example — "Send a Slack message to a channel"
 
 **User says:** "Can you make a workflow to send an alert to our Slack #incidents channel?"
 
@@ -392,7 +417,7 @@ Apply targeted edits and overwrite the file. The Workflows panel reloads from di
 
 ---
 
-## 12. Platform-Specific Learnings (from real-world sessions)
+## 14. Platform-Specific Learnings (from real-world sessions)
 
 These are hard-won lessons from running live automations. Apply them in every workflow you design.
 

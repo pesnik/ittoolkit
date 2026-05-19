@@ -471,6 +471,15 @@ pub async fn workflow_run_create(
     source_conversation_id: Option<String>,
     db: tauri::State<'_, crate::workflow_db::WorkflowDb>,
 ) -> Result<WorkflowRun, String> {
+    // Validate that the workflow file exists before creating a run.
+    let wf_path = workflows_dir()?.join(format!("{}.workflow.json", &workflow_slug));
+    if !fs::metadata(&wf_path).await.map(|m| m.is_file()).unwrap_or(false) {
+        return Err(format!(
+            "Workflow '{}' not found — expected file at {}",
+            workflow_slug,
+            wf_path.display()
+        ));
+    }
     db.create_run(&workflow_slug, &resolved_vars, step_count, source_conversation_id.as_deref())
 }
 
