@@ -137,7 +137,7 @@ const useInterventionStyles = makeStyles({
         border: `1.5px solid ${tokens.colorPaletteRedBorder2}`,
         borderRadius: '8px',
         padding: '12px',
-        background: '#fff0f0',
+        background: tokens.colorNeutralBackground2,
         display: 'flex',
         flexDirection: 'column',
         gap: '10px',

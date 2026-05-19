@@ -14,6 +14,30 @@ import { runInference } from '@/lib/ai/ai-service';
 import { invoke } from '@tauri-apps/api/core';
 import { ModelConfig, AIMode, MessageRole, ModelProvider } from '@/types/ai-types';
 import type { WorkflowStepV2, WorkflowRun } from '@/types/workflow-types';
+import type { ToolExecutionEvent } from '@/lib/ai/inference-with-tools';
+
+function toolProgressMessage(event: ToolExecutionEvent): string {
+    const args = event.arguments ?? {};
+    const done = event.result !== undefined || event.error !== undefined;
+    if (!done) {
+        // Tool just started executing
+        if (event.toolName === 'browser_observe') return 'Agent looking at the page…';
+        if (event.toolName === 'browser_navigate') return `Agent navigating to ${args.url ?? ''}…`;
+        if (event.toolName === 'browser_open') return 'Agent opening browser…';
+        if (event.toolName === 'browser_act') {
+            const action = String(args.action ?? 'interact');
+            if (action === 'click') return `Agent clicking element ${args.index ?? ''}…`;
+            if (action === 'type') return `Agent typing into element ${args.index ?? ''}…`;
+            return `Agent ${action} on element ${args.index ?? ''}…`;
+        }
+        return `Agent calling ${event.toolName}…`;
+    }
+    // Tool completed
+    if (event.toolName === 'browser_observe') return 'Agent read the page — deciding next action…';
+    if (event.toolName === 'browser_act') return 'Action complete — checking result…';
+    if (event.toolName === 'browser_navigate') return 'Navigation complete…';
+    return '';
+}
 
 const MAX_RECOVERY_STEPS = 5;
 
@@ -95,6 +119,7 @@ Stop immediately once the step is done — do not continue to the next step.
 Constraints:
 - Maximum ${MAX_RECOVERY_STEPS} tool calls total.
 - Only use browser_observe, browser_navigate, browser_act for the given session_id.
+- NEVER click elements whose name starts with "Skip to" — they are off-screen accessibility shortcuts that will always time out. Skip past any such indices.
 - After your actions, reply with one sentence confirming what you did.`;
 
 function buildForwardPrompt(
@@ -207,6 +232,10 @@ export async function agentForwardStep(
             {
                 onChunk: () => {},
                 onConfirmExecution: async () => true,
+                onToolExecution: (event) => {
+                    const msg = toolProgressMessage(event);
+                    if (msg) onProgress?.(msg);
+                },
             },
         );
 
@@ -327,6 +356,10 @@ export async function agentRecoveryLoop(
                 // classification. Write/destructive recovery steps would be
                 // escalated to human by the engine before we got here.
                 onConfirmExecution: async () => true,
+                onToolExecution: (event) => {
+                    const msg = toolProgressMessage(event);
+                    if (msg) onProgress?.(msg);
+                },
             },
         );
 

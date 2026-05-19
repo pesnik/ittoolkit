@@ -503,15 +503,37 @@ function executeAgentAction(
     }
 
     const rawAction = typeof args.action === 'string' ? args.action.trim() : '';
-    const ALLOWED_ACTIONS = new Set(['navigate', 'open_file', 'highlight', 'confirm_action']);
+    const ALLOWED_ACTIONS = new Set(['navigate', 'open_file', 'highlight', 'confirm_action', 'suggest_skill']);
     if (!ALLOWED_ACTIONS.has(rawAction)) {
         return {
-            content: `agent_action: invalid "action" value ${JSON.stringify(args.action)}. Must be one of: navigate, open_file, highlight, confirm_action.`,
+            content: `agent_action: invalid "action" value ${JSON.stringify(args.action)}. Must be one of: navigate, open_file, highlight, confirm_action, suggest_skill.`,
             isError: true,
             actions: [],
         };
     }
-    const action = rawAction as 'navigate' | 'open_file' | 'highlight' | 'confirm_action';
+    const action = rawAction as 'navigate' | 'open_file' | 'highlight' | 'confirm_action' | 'suggest_skill';
+
+    // suggest_skill — no paths required; validate skill/title/description only.
+    if (action === 'suggest_skill') {
+        const MAX_SUGGEST_CHARS = 200;
+        const skill = plainText(args.skill, MAX_SUGGEST_CHARS);
+        const title = plainText(args.title, MAX_SUGGEST_CHARS);
+        const description = plainText(args.description, MAX_SUGGEST_CHARS);
+        if (!skill || !title || !description) {
+            return {
+                content: 'agent_action(suggest_skill): "skill", "title", and "description" are required, plain text, ≤ 200 chars each.',
+                isError: true,
+                actions: [],
+            };
+        }
+        turnBudget.actionsRemaining -= 1;
+        const actionId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        return {
+            content: `Action emitted: suggest_skill — ${skill}`,
+            isError: false,
+            actions: [{ type: 'suggest_skill', payload: { actionId, skill, title, description } }],
+        };
+    }
 
     const rawPaths = Array.isArray(args.paths) ? args.paths : [];
     const validPaths: string[] = [];

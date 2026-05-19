@@ -212,7 +212,7 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
     const [running, setRunning] = useState(false);
     const [runStatus, setRunStatus] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [agentRecoveryMsg, setAgentRecoveryMsg] = useState<Record<number, string>>({});
+    const [stepLogs, setStepLogs] = useState<Record<number, string[]>>({});
 
     // Human interaction queues
     const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -290,7 +290,10 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
             });
         },
         onAgentRecoveryProgress(stepIndex, msg) {
-            setAgentRecoveryMsg((prev) => ({ ...prev, [stepIndex]: msg }));
+            setStepLogs((prev) => ({
+                ...prev,
+                [stepIndex]: [...(prev[stepIndex] ?? []), msg],
+            }));
         },
     }), []);
 
@@ -299,6 +302,7 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
         setRunning(true);
         setError(null);
         setRunStatus(null);
+        setStepLogs({});
         window.dispatchEvent(new CustomEvent('workflow-replay-started'));
 
         const engine = new WorkflowEngine();
@@ -340,7 +344,7 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
     const panel = (
         <div
             className={styles.panel}
-            style={{ left: pos.x, top: pos.y, opacity: hovered ? 0.96 : 0.6, transition: 'opacity 0.18s ease' }}
+            style={{ left: pos.x, top: pos.y, opacity: hovered ? 1 : 0.9, transition: 'opacity 0.18s ease' }}
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
@@ -437,6 +441,10 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
                                 <div className={styles.stepList}>
                                     {rawSteps.map((step: any, i: number) => {
                                         const state = stepStates[i] ?? { status: 'pending', attemptCount: 0 };
+                                        const logs: string[] = [
+                                            ...(stepLogs[i] ?? []),
+                                            ...(state.agentReasoning ? [state.agentReasoning] : []),
+                                        ];
                                         return (
                                             <StepRow
                                                 key={step.id ?? i}
@@ -448,7 +456,7 @@ export function WorkflowRunPanel({ slug, name, existingRun, initialVariables, mo
                                                 status={state.status}
                                                 attemptCount={state.attemptCount}
                                                 maxAuto={step.retry?.maxAuto ?? 2}
-                                                agentReasoning={state.agentReasoning ?? agentRecoveryMsg[i]}
+                                                agentLogs={logs.length > 0 ? logs : undefined}
                                                 errorMessage={state.errorMessage}
                                                 screenshot={state.screenshot}
                                                 observedUrl={step.observedUrl}

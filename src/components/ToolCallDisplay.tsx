@@ -26,6 +26,7 @@ import {
     Warning20Regular,
     ErrorCircle20Regular,
     Info20Regular,
+    Sparkle24Regular,
 } from '@fluentui/react-icons';
 import { ToolExecutionData } from '@/types/ai-types';
 import { AgentActionChip } from './AgentActionChip';
@@ -240,6 +241,26 @@ const useStyles = makeStyles({
         justifyContent: 'flex-end',
         ...shorthands.gap('8px'),
         paddingTop: '4px',
+    },
+    suggestSkillCard: {
+        ...shorthands.border('1px', 'solid', tokens.colorBrandStroke1),
+        ...shorthands.borderRadius('8px'),
+        backgroundColor: tokens.colorNeutralBackground1,
+        ...shorthands.padding('12px'),
+        display: 'flex',
+        flexDirection: 'column',
+        ...shorthands.gap('10px'),
+        marginTop: '8px',
+    },
+    suggestSkillHeader: {
+        display: 'flex',
+        alignItems: 'center',
+        ...shorthands.gap('8px'),
+    },
+    suggestSkillTitle: {
+        fontSize: '14px',
+        fontWeight: 600,
+        color: tokens.colorBrandForeground1,
     },
 });
 
@@ -611,6 +632,39 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
                                         {JSON.stringify((p as any).data, null, 2)}
                                     </div>
                                 )}
+                            </div>
+                        );
+                    })}
+
+                    {/* Suggest Skill Inline Card */}
+                    {execution.actions?.map((action, idx) => {
+                        if (action.type !== 'suggest_skill') return null;
+                        const p = action.payload;
+                        return (
+                            <div key={`suggest-skill-${idx}`} className={styles.suggestSkillCard}>
+                                <div className={styles.suggestSkillHeader}>
+                                    <Sparkle24Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+                                    <Text className={styles.suggestSkillTitle}>{p.title}</Text>
+                                </div>
+                                {p.description && (
+                                    <Text className={styles.cardDescription}>{p.description}</Text>
+                                )}
+                                <div className={styles.cardActions}>
+                                    <Button
+                                        appearance="subtle"
+                                        size="small"
+                                        onClick={() => onActionResponse?.(p.actionId, 'dismiss')}
+                                    >
+                                        Maybe later
+                                    </Button>
+                                    <Button
+                                        appearance="primary"
+                                        size="small"
+                                        onClick={() => onActionResponse?.(p.actionId, 'confirm')}
+                                    >
+                                        Get Started
+                                    </Button>
+                                </div>
                             </div>
                         );
                     })}

@@ -111,7 +111,7 @@ export default function Home() {
     if (!featureFlags.browserAgent) return;
     const onStart = () => {
       setRecordingActive(true);
-      setAiPanelPrefill('Browser is open and recording. Tell me what to do — e.g. "Navigate to okta.com and unlock user john@example.com"');
+      setAiPanelPrefill('/workflow-creator ');
       setIsAIPanelOpen(true);
     };
     const onStop = () => setRecordingActive(false);

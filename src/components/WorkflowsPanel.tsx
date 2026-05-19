@@ -28,6 +28,7 @@ import WorkflowRunPanel from './WorkflowRunPanel';
 import { WorkflowRecordingReview } from './WorkflowRecordingReview';
 import type { WorkflowStepV1, WorkflowFileV2, WorkflowRun } from '@/types/workflow-types';
 import type { ModelConfig } from '@/types/ai-types';
+import { useModelConfig } from '@/lib/ModelConfigContext';
 
 interface WorkflowSummary {
     name: string;
@@ -108,8 +109,10 @@ const useStyles = makeStyles({
     },
 });
 
-export function WorkflowsPanel({ modelConfig }: Props) {
+export function WorkflowsPanel({ modelConfig: modelConfigProp }: Props) {
     const styles = useStyles();
+    const { modelConfig: sharedModelConfig } = useModelConfig();
+    const modelConfig = modelConfigProp ?? sharedModelConfig;
     const [list, setList] = useState<WorkflowSummary[]>([]);
     const [incompleteRuns, setIncompleteRuns] = useState<WorkflowRun[]>([]);
     const [status, setStatus] = useState<RecordingStatus | null>(null);

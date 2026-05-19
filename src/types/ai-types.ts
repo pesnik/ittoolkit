@@ -103,6 +103,12 @@ export type ToolResultAction =
         /** Absolute working directory for the suggested command. */
         suggestedWorkingDir: string;
     } }
+  | { type: 'suggest_skill'; payload: {
+        actionId: string;
+        skill: string;
+        title: string;
+        description: string;
+    } }
   | { type: 'browser_preview'; payload: {
         /** Tool name (browser_open / browser_navigate / browser_observe / browser_close). */
         kind: string;

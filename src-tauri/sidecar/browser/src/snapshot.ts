@@ -91,6 +91,14 @@ function tagKey(role: string, name: string): string {
 
 function shouldKeep(node: RawAx): boolean {
     if (!node.role) return false;
+    // Exclude off-screen accessibility skip-navigation shortcuts. These appear
+    // as the first AX nodes on Atlassian (and many other) pages with names like
+    // "Skip to:", "Skip to Main Content", "Skip to sidebar". They are
+    // positioned off-screen via CSS and Playwright can never click them —
+    // any attempt times out after 30 s. Remove them from the tree entirely
+    // so the model never receives their index and cannot attempt to use them.
+    const nameLC = (node.name ?? '').trim().toLowerCase();
+    if (nameLC.startsWith('skip to') || nameLC === 'skip navigation') return false;
     if (INTERACTIVE_ROLES.has(node.role)) return true;
     if (STRUCTURAL_ROLES.has(node.role) && (node.name?.trim().length ?? 0) > 0) return true;
     // Plain text nodes carry the page's prose; keep them when they have a name

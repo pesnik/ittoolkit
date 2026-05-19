@@ -140,14 +140,16 @@ export async function handleAct(params: ActParams): Promise<ActResult> {
     const currentUrl = ref.page.url();
     let observation = ref.lastObservation;
 
-    // Invalidate if stale OR if URL changed (e.g. SPA navigation happened between observe and act)
+    // Fail explicitly when URL changed since last observe — silently re-snapping and applying
+    // the old index to a new AX tree maps to a completely wrong element.
     const urlChanged = observation && observation.url !== currentUrl;
-    if (!observation || now - observation.capturedAt > SNAPSHOT_STALE_MS || urlChanged) {
-        if (urlChanged) {
-            log.info('browser.act: URL changed since last observe, re-capturing AX tree', {
-                from: observation?.url, to: currentUrl,
-            });
-        }
+    if (urlChanged) {
+        throw new Error(
+            `browser.act: page navigated from "${observation!.url}" to "${currentUrl}" since last observe. ` +
+            `Call browser_observe to get fresh element indices before acting.`
+        );
+    }
+    if (!observation || now - observation.capturedAt > SNAPSHOT_STALE_MS) {
         const ax = await captureAxTree(ref.page, 80);
         observation = { ax, capturedAt: now, url: currentUrl };
         ref.lastObservation = observation;

@@ -73,7 +73,7 @@ const AGENT_ACTION_TOOL: Tool = {
     type: 'function',
     function: {
         name: 'agent_action',
-        description: `Emit a structured action that the app renders natively as clickable paths, confirmation dialogs, or file highlights.
+        description: `Emit a structured action that the app renders natively as clickable paths, confirmation dialogs, file highlights, or skill-suggestion cards.
 
 Use this INSTEAD of writing file paths in plain text. The app shows chips, dialogs, and navigation — much better than text.
 
@@ -81,10 +81,12 @@ Examples:
 • After du -sh, call agent_action with action="navigate" and paths=["/Users/name/Library/Caches"] to let the user click and browse
 • Before any destructive command (rm/mv/dd/etc.), call agent_action with action="confirm_action", paths=[…], title="Delete 3 caches", description="These are safe to remove", totalSize=<bytes>, severity="medium", suggestedCommand="rm -rf '/path/a' '/path/b'", suggestedWorkingDir="/Users/name". The app will run suggestedCommand verbatim if the user clicks Execute — do NOT re-issue the command in a later turn.
 • For files the user should inspect, call agent_action with action="open_file" and paths=["..."]
+• After completing a multi-step browser task, call agent_action with action="suggest_skill", skill="workflow-creator", title="Save as Workflow", description="Turn what we just did into a reusable automation you can run with one click."
 
 Constraints (enforced at dispatch):
 - Paths must be absolute (start with "/" or a Windows drive letter); no embedded newlines or NULs; ≤ 4096 chars each.
 - For confirm_action: title and description are required, plain text only, ≤ 500 chars each.
+- For suggest_skill: skill, title, and description are required, plain text only, ≤ 200 chars each. No paths needed.
 - severity defaults to "medium" when omitted; the app may escalate to "high" for system paths or very large operations regardless of what you claim.
 - Max 5 actions per model response. Excess calls are rejected — batch into one confirm_action where possible.`,
         parameters: {
@@ -92,7 +94,7 @@ Constraints (enforced at dispatch):
             properties: {
                 action: {
                     type: 'string',
-                    enum: ['navigate', 'open_file', 'highlight', 'confirm_action'],
+                    enum: ['navigate', 'open_file', 'highlight', 'confirm_action', 'suggest_skill'],
                     description: 'What kind of UI action to emit.',
                 },
                 paths: {
@@ -125,8 +127,12 @@ Constraints (enforced at dispatch):
                     type: 'string',
                     description: 'REQUIRED for confirm_action. Absolute working directory for suggestedCommand.',
                 },
+                skill: {
+                    type: 'string',
+                    description: 'REQUIRED for suggest_skill. The skill name to invoke (e.g. "workflow-creator"), plain text, ≤ 200 chars.',
+                },
             },
-            required: ['action', 'paths'],
+            required: ['action'],
         },
     },
 };
@@ -932,11 +938,15 @@ Detect these signals from browser_observe results and IMMEDIATELY switch to head
 - Page content indicates bot/automation detection ("JavaScript is required", "browser not supported")
 
 When ANY of these signals are detected, take these steps IN ORDER — do not skip any:
-1. Call browser_open with the SAME session_id, headed=true, and profile="persistent". This upgrades the session in-place; cookies and the current URL are preserved automatically.
-2. Tell the user exactly: "I've opened a browser window for you to complete the login/verification. Please sign in and then tell me to continue."
+1. FIRST — call browser_open with the SAME session_id, headed=true, and profile="persistent". This upgrades the session in-place; cookies and the current URL are preserved automatically. Do NOT write any message to the user before this tool call completes.
+2. THEN — tell the user exactly: "I've opened a browser window for you to complete the login/verification. Please sign in and then tell me to continue."
 3. STOP — do not call any more browser tools. Wait for the user to explicitly say they have completed the interaction before proceeding.
 
-Do NOT try to type passwords or click submit on login forms. Do NOT loop calling browser_observe to poll for completion. Wait for the user.` : ''}`;
+Do NOT try to type passwords or click submit on login forms. Do NOT loop calling browser_observe to poll for completion. Wait for the user.
+
+### Workflow creation offer
+After successfully completing a multi-step browser task (you navigated, filled fields, submitted, and got a result), call agent_action with action="suggest_skill", skill="workflow-creator", title="Save as Workflow", description="Turn what we just did into a reusable automation you can run with one click."
+Do NOT offer this in plain text — emit the card. Only once per completed task, not after every individual step.` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

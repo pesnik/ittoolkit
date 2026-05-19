@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { makeStyles, tokens, Text, Button } from '@fluentui/react-components';
+import React, { useState, useRef, useEffect } from 'react';
+import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import {
     CheckmarkCircle16Filled,
     ErrorCircle16Filled,
@@ -25,7 +25,8 @@ interface StepRowProps {
     status: StepRunStatus;
     attemptCount: number;
     maxAuto: number;
-    agentReasoning?: string;
+    /** Accumulated action log lines — shown as live feed when active, collapsible when done. */
+    agentLogs?: string[];
     errorMessage?: string;
     screenshot?: string;
     observedUrl?: string;
@@ -51,6 +52,9 @@ const useStyles = makeStyles({
         padding: '7px 10px',
         borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
         ':last-child': { borderBottom: 'none' },
+    },
+    rowActive: {
+        background: tokens.colorNeutralBackground2,
     },
     index: {
         width: '20px',
@@ -110,13 +114,50 @@ const useStyles = makeStyles({
         color: tokens.colorPaletteRedForeground1,
         marginTop: '2px',
     },
-    reasoning: {
+    // Terminal-style log area
+    logArea: {
+        marginTop: '6px',
+        background: tokens.colorNeutralBackground4 ?? tokens.colorNeutralBackground3,
+        borderRadius: '5px',
+        border: `1px solid ${tokens.colorNeutralStroke2}`,
+        padding: '6px 8px',
+        maxHeight: '140px',
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+    },
+    logLine: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '6px',
+        fontSize: '11px',
+        fontFamily: tokens.fontFamilyMonospace ?? 'monospace',
+        color: tokens.colorNeutralForeground2,
+        lineHeight: '1.5',
+    },
+    logLineCurrent: {
+        color: tokens.colorPaletteBlueForeground2,
+        fontWeight: '600',
+    },
+    logDot: {
+        flexShrink: 0,
+        marginTop: '1px',
+        width: '12px',
+        textAlign: 'center',
+    },
+    toggleBtn: {
+        background: 'none',
+        border: 'none',
+        padding: '0',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '3px',
+        marginTop: '3px',
         fontSize: '11px',
         color: tokens.colorNeutralForeground3,
-        background: tokens.colorNeutralBackground3,
-        borderRadius: '4px',
-        padding: '4px 8px',
-        marginTop: '4px',
+        ':hover': { color: tokens.colorNeutralForeground1 },
     },
     screenshot: {
         width: '100%',
@@ -157,26 +198,43 @@ export function StepRow({
     status,
     attemptCount,
     maxAuto,
-    agentReasoning,
+    agentLogs,
     errorMessage,
     screenshot,
     observedUrl,
 }: StepRowProps) {
     const styles = useStyles();
     const [expanded, setExpanded] = useState(false);
-    const hasDetails = !!(agentReasoning || errorMessage || screenshot);
+    const logRef = useRef<HTMLDivElement>(null);
+
+    const isActive = status === 'running' || status === 'agent_recovery';
+    const hasLogs = !!(agentLogs && agentLogs.length > 0);
+    const hasDetails = hasLogs || !!errorMessage || !!screenshot;
     const showRetry = attemptCount > 0 && status !== 'done' && status !== 'skipped';
-    const showAgentBadge = status === 'agent_recovery' || (agentReasoning && status === 'done');
+
+    // Auto-scroll log to bottom when new lines arrive
+    useEffect(() => {
+        if (isActive && logRef.current) {
+            logRef.current.scrollTop = logRef.current.scrollHeight;
+        }
+    }, [agentLogs, isActive]);
+
+    // Auto-expand when step becomes active
+    useEffect(() => {
+        if (isActive) setExpanded(true);
+    }, [isActive]);
+
+    const showLog = hasLogs && (isActive || expanded);
 
     return (
-        <div className={styles.row}>
+        <div className={`${styles.row} ${isActive ? styles.rowActive : ''}`}>
             <span className={styles.index}>{index + 1}</span>
             <span className={styles.iconCol}>
                 <StatusIcon status={status} />
             </span>
             <div className={styles.body}>
                 <div className={styles.intentRow}>
-                    <Text size={200} weight={status === 'running' || status === 'agent_recovery' ? 'semibold' : 'regular'}>
+                    <Text size={200} weight={isActive ? 'semibold' : 'regular'}>
                         {intent || tool}
                     </Text>
                     {showRetry && (
@@ -184,12 +242,11 @@ export function StepRow({
                             retry {attemptCount}/{maxAuto}
                         </span>
                     )}
-                    {showAgentBadge && (
-                        <span className={styles.agentBadge}>
-                            🧠 agent
-                        </span>
+                    {(isActive || (hasLogs && status === 'done')) && actor === 'agent' && (
+                        <span className={styles.agentBadge}>agent</span>
                     )}
                 </div>
+
                 <div className={styles.meta}>
                     <span className={styles.actorBadge} style={{ color: ACTOR_COLOR[actor] }}>
                         {ACTOR_ICON[actor]}
@@ -209,37 +266,46 @@ export function StepRow({
                     )}
                 </div>
 
-                {/* Expandable details */}
-                {hasDetails && (
-                    <button
-                        style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, marginTop: 2, fontSize: 11, color: tokens.colorNeutralForeground3 }}
-                        onClick={() => setExpanded((e) => !e)}
-                    >
+                {/* Error always shown inline */}
+                {errorMessage && (
+                    <Text className={styles.errorText}>{errorMessage}</Text>
+                )}
+
+                {/* Log toggle for completed steps */}
+                {!isActive && hasDetails && (
+                    <button className={styles.toggleBtn} onClick={() => setExpanded(e => !e)}>
                         {expanded ? <ChevronUp12Regular /> : <ChevronDown12Regular />}
-                        {expanded ? 'Hide details' : 'Show details'}
+                        {expanded ? 'Hide log' : `Show log (${(agentLogs?.length ?? 0)} lines)`}
                     </button>
                 )}
 
-                {expanded && (
-                    <>
-                        {errorMessage && (
-                            <Text className={styles.errorText}>{errorMessage}</Text>
-                        )}
-                        {agentReasoning && (
-                            <div className={styles.reasoning}>
-                                <Text size={100} style={{ fontStyle: 'italic' }}>
-                                    🧠 {agentReasoning}
-                                </Text>
-                            </div>
-                        )}
-                        {screenshot && (
-                            <img
-                                src={`data:image/jpeg;base64,${screenshot}`}
-                                alt="step state"
-                                className={styles.screenshot}
-                            />
-                        )}
-                    </>
+                {/* Action log — live when active, collapsible when done */}
+                {showLog && (
+                    <div className={styles.logArea} ref={logRef}>
+                        {agentLogs!.map((line, i) => {
+                            const isCurrent = isActive && i === agentLogs!.length - 1;
+                            return (
+                                <div
+                                    key={i}
+                                    className={`${styles.logLine} ${isCurrent ? styles.logLineCurrent : ''}`}
+                                >
+                                    <span className={styles.logDot}>
+                                        {isCurrent ? '▶' : '✓'}
+                                    </span>
+                                    {line}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {/* Screenshot shown when expanded (non-active) */}
+                {!isActive && expanded && screenshot && (
+                    <img
+                        src={`data:image/jpeg;base64,${screenshot}`}
+                        alt="step state"
+                        className={styles.screenshot}
+                    />
                 )}
             </div>
         </div>

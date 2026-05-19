@@ -1,7 +1,7 @@
 ---
 name: workflow-creator
 description: Collaborative workflow designer. Translates a plain-language task description ("unlock a user in Okta", "create a Jira ticket", "post an alert to Slack") into a production-ready ittoolkit v2 workflow JSON file. Covers eliciting requirements, drafting steps, variable design, actor assignment, retry policy, and saving the file so it appears instantly in the Workflows panel.
-when_to_use: Use whenever a user wants to create, edit, or understand an ittoolkit workflow. Triggers — "make a workflow", "create a workflow for", "can you build a workflow that", "automate [task] in [tool]", "add a new workflow", "how do I make a workflow", "edit this workflow", "what can workflows do".
+when_to_use: Use whenever a user wants to create, edit, or understand an ittoolkit workflow. Triggers — "make a workflow", "create a workflow for", "can you build a workflow that", "automate [task] in [tool]", "add a new workflow", "how do I make a workflow", "edit this workflow", "what can workflows do". Also triggered when the user accepts an agent's offer to convert a completed browser session into a workflow — skip the preamble and begin immediately with the elicitation questions (section 1).
 user-invocable: true
 allowed-tools:
   - execute_command
@@ -420,6 +420,31 @@ Apply targeted edits and overwrite the file. The Workflows panel reloads from di
 7. `browser.act` press — press Enter to send (auto, classification: write)
 
 **Variables:** `channel_name` (human_input, default "incidents"), `alert_message` (conversation_context).
+
+---
+
+## 12. Platform-Specific Learnings (from real-world sessions)
+
+These are hard-won lessons from running live automations. Apply them in every workflow you design.
+
+### Always open with persistent profile
+Use `profile: "persistent"` in the very first `browser.open` step — never change this mid-session. If you open ephemeral and then later switch to persistent (e.g. on a headed upgrade), the cookies from the user's login in the ephemeral session are NOT carried over to the new persistent profile on disk. The user will need to log in again.
+
+### Login detection → headed upgrade: call first, speak second
+When the agent detects a login/SSO page, it MUST call `browser_open(session_id, headed=true, profile="persistent")` BEFORE sending any message to the user. The user sees "I've opened a browser window for you" and expects the window to already be there. Reversing the order leaves the user with nothing to interact with. The sidecar handles the headed upgrade in-place — cookies and URL are preserved automatically.
+
+### AX indices are page-scoped — always re-observe after navigation
+An AX index from `browser_observe` is only valid on the exact URL at the moment of observation. After ANY navigation — even an SPA route change — call `browser_observe` again to get fresh indices before calling `browser_act`. The sidecar now throws an explicit error if the URL changed since the last observe; do not retry the same index, re-observe first.
+
+### "Skip to:" off-screen elements
+Enterprise SPAs (Jira, ServiceNow, M365) place off-screen accessibility links at AX indices 0–2 ("Skip to:", "Skip to Main Content"). These are outside the viewport and will always time out if clicked (30-second hang). In `agentHint` for any click step on these sites, add: "Do not click elements named 'Skip to:' or 'Skip to Main Content'."
+
+### ProseMirror / rich-text description fields: click then type
+Jira (and many enterprise tools) use ProseMirror, a contenteditable rich-text editor. The correct pattern is:
+1. `browser_act click` on the Description field element (focuses the editor)
+2. `browser_act type` with the text
+
+Calling `type` without the prior `click` fails with "Element is not an input/textarea/contenteditable". Add this two-step pattern to the `agentHint` of any description-fill step targeting Jira.
 
 ---
 

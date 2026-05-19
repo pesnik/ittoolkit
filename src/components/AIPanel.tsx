@@ -76,6 +76,7 @@ import {
     parseSkillInvocation,
 } from '@/lib/skills/store';
 import { logActionEvent } from '@/lib/agent/audit';
+import { useModelConfig } from '@/lib/ModelConfigContext';
 
 const useStyles = makeStyles({
     container: {
@@ -185,6 +186,7 @@ export const AIPanel = ({
     prefillInput,
 }: AIPanelProps) => {
     const styles = useStyles();
+    const { setModelConfig: setSharedModelConfig } = useModelConfig();
 
     // Agent is the only mode. Kept as a const to avoid a wide rename of "mode" call sites.
     const mode = AIMode.Agent;
@@ -263,6 +265,12 @@ export const AIPanel = ({
         items: string[];
     }
     const pendingActionsRef = useRef<Map<string, PendingAgentAction>>(new Map());
+
+    interface PendingSkillAction {
+        skill: string;
+        title: string;
+    }
+    const pendingSkillActionsRef = useRef<Map<string, PendingSkillAction>>(new Map());
 
     const handleDownloadModel = async (modelId: string, provider: ModelProvider) => {
         if (provider !== ModelProvider.LlamaCpp) return;
@@ -419,6 +427,27 @@ export const AIPanel = ({
                 if (modelToSelect && providerToUse) {
                     setSelectedModelId(modelToSelect.id);
                     setActiveProvider(providerToUse);
+                    // Publish a base config so WorkflowsPanel can run agent steps
+                    // even before the user sends their first chat message.
+                    const endpointKey = providerToUse === ModelProvider.OpenAICompatible
+                        ? 'defaultAIEndpoint_openaiCompatible'
+                        : 'defaultAIEndpoint_ollama';
+                    const initEndpoint = getActiveProvider()?.endpoint
+                        || localStorage.getItem(endpointKey)
+                        || modelToSelect.endpoint;
+                    const initApiKey = getActiveProvider()?.apiKey
+                        || localStorage.getItem('defaultAIKey_openaiCompatible')
+                        || undefined;
+                    const initModelId = providerToUse === ModelProvider.OpenAICompatible
+                        ? (getActiveProvider()?.modelName || localStorage.getItem('customModelName_openaiCompatible') || modelToSelect.modelId)
+                        : modelToSelect.modelId;
+                    setSharedModelConfig({
+                        ...modelToSelect,
+                        provider: providerToUse,
+                        modelId: initModelId,
+                        ...(initEndpoint ? { endpoint: initEndpoint } : {}),
+                        ...(initApiKey ? { apiKey: initApiKey } : {}),
+                    });
                 }
             } catch (error) {
                 console.error('Failed to initialize AI panel:', error);
@@ -877,6 +906,8 @@ export const AIPanel = ({
                     ...(apiKey ? { apiKey } : {}),
                 };
 
+            setSharedModelConfig(modelConfigWithEndpoint);
+
             console.log('[AIPanel] Selected model:', selectedModel?.id);
             console.log('[AIPanel] Selected model endpoint:', selectedModel?.endpoint);
             console.log('[AIPanel] endpointToUse:', endpointToUse);
@@ -980,6 +1011,11 @@ export const AIPanel = ({
                                     paths: action.payload.items,
                                     suggestedCommand: action.payload.suggestedCommand,
                                     suggestedWorkingDir: action.payload.suggestedWorkingDir,
+                                });
+                            } else if (action.type === 'suggest_skill') {
+                                pendingSkillActionsRef.current.set(action.payload.actionId, {
+                                    skill: action.payload.skill,
+                                    title: action.payload.title,
                                 });
                             }
                         }
@@ -1172,6 +1208,31 @@ export const AIPanel = ({
     };
 
     const handleToolActionResponse = useCallback(async (actionId: string, response: 'confirm' | 'dismiss') => {
+        // Check suggest_skill registry first — different handling path from confirm_action.
+        const pendingSkill = pendingSkillActionsRef.current.get(actionId);
+        if (pendingSkill) {
+            pendingSkillActionsRef.current.delete(actionId);
+            if (response === 'dismiss') {
+                handleSendMessage(`[user dismissed the "${pendingSkill.title}" suggestion — acknowledged, continuing]`);
+                return;
+            }
+            // Confirm: inject skill body as a system message then trigger elicitation.
+            try {
+                const body = await invoke<string | null>('get_skill_body', { name: pendingSkill.skill });
+                const systemMsg: ChatMessage = {
+                    id: `skill-${pendingSkill.skill}-${Date.now()}`,
+                    role: MessageRole.System,
+                    content: `# Skill invoked: /${pendingSkill.skill}\n\n${body ?? ''}`,
+                    timestamp: Date.now(),
+                };
+                setMessages((prev) => [...prev, systemMsg]);
+            } catch (e) {
+                console.warn('[AIPanel] suggest_skill: could not load skill body', e);
+            }
+            handleSendMessage('[user clicked "Get Started" — begin the workflow elicitation immediately, starting with section 1 questions]');
+            return;
+        }
+
         const pending = pendingActionsRef.current.get(actionId);
         // Single-use; remove so a double-click can't re-run the command.
         pendingActionsRef.current.delete(actionId);

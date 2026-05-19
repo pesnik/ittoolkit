@@ -170,6 +170,9 @@ const PROFILES: SiteProfile[] = [
             { selector: '[data-testid="{name}"]' },
             { selector: '[aria-label="{name}"]' },
             { selector: '[data-ds--text-field--input="{name}"]' },
+            // ProseMirror rich-text editor (Description field) is a contenteditable div,
+            // not a standard input. Matched when the agent targets textbox/generic nodes.
+            { selector: '.ProseMirror[contenteditable="true"]', roles: ['textbox', 'generic'] },
         ],
         preActDelayMs: 150,
     },
