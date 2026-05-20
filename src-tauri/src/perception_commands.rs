@@ -16,7 +16,7 @@ const RPC_TIMEOUT_SECS: u64 = 60;
 type PendingMap = HashMap<u64, oneshot::Sender<Result<Value, String>>>;
 
 #[derive(Default)]
-struct SupervisorInner {
+pub(crate) struct SupervisorInner {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     pending: PendingMap,
@@ -86,7 +86,7 @@ fn which_python() -> Option<String> {
     None
 }
 
-async fn ensure_spawned(
+pub async fn ensure_spawned(
     inner: Arc<Mutex<SupervisorInner>>,
     _app: &AppHandle,
 ) -> Result<(), String> {
@@ -205,7 +205,7 @@ async fn next_id(inner: &Arc<Mutex<SupervisorInner>>) -> u64 {
     guard.next_id
 }
 
-async fn send_rpc(
+pub async fn send_rpc(
     inner: Arc<Mutex<SupervisorInner>>,
     method: String,
     params: Value,

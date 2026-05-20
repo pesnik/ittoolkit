@@ -262,6 +262,7 @@ pub fn run() {
         browser_capability::browser_get_capabilities,
         // Computer-use harness (CU-M2 read-only, CU-M3 write)
         computer_commands::computer_screenshot,
+        computer_commands::computer_find,
         computer_commands::computer_screen_size,
         computer_commands::computer_cursor_position,
         computer_commands::computer_mouse_move,

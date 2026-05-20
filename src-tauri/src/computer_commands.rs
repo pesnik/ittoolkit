@@ -501,3 +501,42 @@ pub async fn computer_kill(state: State<'_, ComputerState>) -> Result<(), String
     state.abort.store(true, Ordering::SeqCst);
     Ok(())
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindResult {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub label: String,
+    pub confidence: f64,
+}
+
+#[command]
+pub async fn computer_find(
+    app: AppHandle,
+    query: String,
+    display_index: Option<usize>,
+    state: State<'_, crate::perception_commands::PerceptionSupervisor>,
+) -> Result<Vec<FindResult>, String> {
+    let screenshot = computer_screenshot(display_index).await?;
+    let inner = std::sync::Arc::clone(&state.inner);
+    crate::perception_commands::ensure_spawned(
+        std::sync::Arc::clone(&inner),
+        &app,
+    )
+    .await?;
+    let params = serde_json::json!({
+        "query": query,
+        "screenshot": screenshot.screenshot,
+        "display_index": display_index.unwrap_or(0),
+    });
+    let result = crate::perception_commands::send_rpc(
+        inner,
+        "find".to_string(),
+        params,
+    )
+    .await?;
+    serde_json::from_value(result).map_err(|e| format!("failed to parse find result: {}", e))
+}
