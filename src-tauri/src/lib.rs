@@ -24,6 +24,7 @@ mod computer_classify;
 mod perception_commands;
 mod mcp_types;
 mod mcp_client;
+pub mod mcp_server;
 
 use std::str::FromStr;
 use tauri::Manager;
