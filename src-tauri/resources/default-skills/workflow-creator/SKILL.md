@@ -15,6 +15,10 @@ allowed-tools:
   - workflow_run
   - get_workflow_schema
   - agent_action
+  - computer_screenshot
+  - computer_find
+  - computer_screen_size
+  - computer_cursor_position
 profile: ephemeral
 ---
 
@@ -79,6 +83,7 @@ Use the returned schema to construct valid workflow JSON. The schema includes:
   - **System**: shell.exec (run shell commands), http.request (REST API calls)
   - **Composition**: workflow.run (run another workflow/activity by slug)
   - **Human**: human.gate (pause for manual work), agent.task (delegate to AI)
+  - **Computer-use**: computer_screenshot, computer_find, computer_screen_size, computer_cursor_position, computer_mouse_move, computer_left_click, computer_right_click, computer_middle_click, computer_double_click, computer_left_click_drag, computer_type, computer_key, computer_scroll
 - `actor_types` — auto, agent, human with descriptions of when to use each
 - `variable_sources` — human_input, conversation_context, literal, step_output
 - `classifications` — read, write, destructive
@@ -526,6 +531,112 @@ You can also guide the user to set the schedule via the **Schedule** button (clo
 
 ---
 
+## 12. Computer-use tool patterns (desktop automation)
+
+The **computer-use harness** extends ittoolkit beyond the browser to the entire desktop. It is gated behind a feature flag (`computerUseAgent`, default off) and requires **macOS Accessibility permission** for element finding.
+
+### Available tools
+
+| Tool | Description | Actor |
+|------|-------------|-------|
+| `computer_screenshot` | Capture desktop screenshot as base64 JPEG + dims. Read-only. | `auto` or `agent` |
+| `computer_screen_size` | List display layout (index, x, y, w, h, scale). Read-only. | `auto` |
+| `computer_cursor_position` | Return current cursor (x, y). Read-only. | `auto` |
+| `computer_find` | Locate a UI element by natural-language description — returns `[{x, y, w, h, label, confidence}]`. Read-only. Uses macOS Accessibility API tier 1, OCR tier 2 (optional), OmniParser tier 3 (future). | `auto` |
+| `computer_mouse_move` | Move cursor to (x, y). **Interactive** — requires user approval. | `agent` |
+| `computer_left_click` / `right_click` / `middle_click` / `double_click` | Click at (x, y) or current position. Interactive. | `agent` |
+| `computer_left_click_drag` | Drag from (x1,y1) to (x2,y2). Interactive. | `agent` |
+| `computer_type` | Type text into focused element. Interactive. | `agent` |
+| `computer_key` | Press a key or chord (e.g. "Enter", "cmd+space"). Interactive. | `agent` |
+| `computer_scroll` | Scroll up/down/left/right by N clicks. Interactive. | `agent` |
+
+**Read-only tools** (screenshot, screen_size, cursor_position, find) run autonomously.  
+**Write actions** (mouse, click, type, key, scroll) are paused for user approval — a confirmation card shows the intent + screenshot preview. The user can approve or abort. Triple-Escape triggers a kill switch.
+
+### Step patterns
+
+#### 1. Screenshot + find (the standard perception loop)
+
+```json
+{
+  "id": "step-look",
+  "intent": "Take a screenshot to see the desktop state",
+  "tool": "computer_screenshot",
+  "params": {},
+  "actor": "auto",
+  "classification": "read"
+}
+```
+
+```json
+{
+  "id": "step-find-save",
+  "intent": "Find the Save button on screen",
+  "tool": "computer_find",
+  "params": { "query": "Save button" },
+  "actor": "auto",
+  "classification": "read"
+}
+```
+
+#### 2. Click a located element
+
+```json
+{
+  "id": "step-click-save",
+  "intent": "Click the Save button at the found coordinates",
+  "tool": "computer_left_click",
+  "params": { "x": 800, "y": 600 },
+  "actor": "agent",
+  "classification": "write",
+  "retry": { "maxAuto": 1, "escalateTo": "agent" }
+}
+```
+
+Use `agent` actor so the AI can re-locate the element if coordinates changed (e.g. window was resized). The agent calls `computer_screenshot` + `computer_find` again in recovery.
+
+#### 3. Type into a text field
+
+```json
+{
+  "id": "step-type-query",
+  "intent": "Type a search query into the focused field",
+  "tool": "computer_type",
+  "params": { "text": "{{ search_query }}" },
+  "actor": "agent",
+  "classification": "write",
+  "retry": { "maxAuto": 1, "escalateTo": "agent" }
+}
+```
+
+Always pair with a prior click step that focuses the input field. For multi-field forms, use separate click → type pairs rather than tabbing between fields.
+
+#### 4. Keyboard shortcut
+
+```json
+{
+  "id": "step-save-shortcut",
+  "intent": "Save using keyboard shortcut",
+  "tool": "computer_key",
+  "params": { "key": "cmd+s" },
+  "actor": "auto",
+  "classification": "write"
+}
+```
+
+Supported modifiers: `ctrl`, `shift`, `alt`, `cmd`/`meta`. Single keys: `enter`, `tab`, `escape`, `space`, `backspace`, `delete`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`.
+
+### When to use computer-use vs browser automation
+
+| Use Browser | Use Computer-use |
+|-------------|-----------------|
+| The target is a known web app with selectors | It's a native desktop app (Finder, Outlook, Slack desktop) |
+| You need high reliability and structured element access | The page is rendered in a non-standard WebView |
+| The workflow runs headless / scheduled | The workflow needs human approval for each action |
+| The site has a well-defined DOM | You need to interact with system dialogs (file picker, print) |
+
+---
+
 ## 13. Editing an existing workflow
 
 To read an existing workflow, use `get_workflow_schema` for tool reference, then call `workflow_load` to get the full workflow:
@@ -546,7 +657,51 @@ Do **NOT** overwrite workflow files via shell commands — always use the `workf
 
 ---
 
-## 14. Worked example — "Send a Slack message to a channel"
+## 14. MCP server mode — exposing tools to external agents
+
+ittoolkit can run as an **MCP server** via the `--mcp-server` CLI flag. In this mode it speaks the standard MCP stdio protocol (v2024-11-05) so external agents — Claude Desktop, Cursor, Open Interpreter — can discover ittoolkit's tool catalog and resources.
+
+### Starting the server
+
+```bash
+./ittoolkit --mcp-server
+```
+
+### What's exposed
+
+| Method | Behavior |
+|--------|----------|
+| `initialize` | Returns protocol version, tool + resource capabilities |
+| `tools/list` | Lists `computer_*` tools (screenshot, screen_size, cursor_position, find, left_click, type, key) with full schemas |
+| `tools/call` | **Refuses execution** — all tools require user approval inside ittoolkit. The response tells the external agent to "open ittoolkit and dispatch from there" |
+| `resources/list` | Exposes audit log (`~/.ittoolkit/audit.jsonl`), workflows directory, skills directory as `file://` URIs |
+| `resources/read` | Reads file contents for any `file://` URI |
+| `ping` | Standard keepalive |
+
+### Design rationale
+
+Write actions (mouse clicks, typing, key presses) are **never executed remotely**. The MCP server exists so external agents can *plan* using ittoolkit's tool catalog, but the actual execution flows through the ittoolkit GUI where the user sees approval cards and has the kill switch. This prevents remote-triggered desktop actions without the local user's knowledge.
+
+### Use with Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ittoolkit": {
+      "command": "/path/to/ittoolkit",
+      "args": ["--mcp-server"]
+    }
+  }
+}
+```
+
+Claude Desktop can then list tools, inspect resources, and incorporate ittoolkit's capabilities into its planning — but execution stays local.
+
+---
+
+## 15. Worked example — "Send a Slack message to a channel"
 
 **User says:** "Can you make a workflow to send an alert to our Slack #incidents channel?"
 
@@ -568,7 +723,7 @@ Do **NOT** overwrite workflow files via shell commands — always use the `workf
 
 ---
 
-## 15. Platform-Specific Learnings (from real-world sessions)
+## 16. Platform-Specific Learnings (from real-world sessions)
 
 These are hard-won lessons from running live automations. Apply them in every workflow you design.
 
@@ -590,6 +745,18 @@ Jira (and many enterprise tools) use ProseMirror, a contenteditable rich-text ed
 2. `browser_act type` with the text
 
 Calling `type` without the prior `click` fails with "Element is not an input/textarea/contenteditable". Add this two-step pattern to the `agentHint` of any description-fill step targeting Jira.
+
+### Computer-use: screen coordinates are absolute, not relative to windows
+`computer_mouse_move(x, y)` uses absolute display coordinates. The primary display's top-left is (0, 0). If you have a secondary monitor to the right, its x coordinates are offset by the primary display's width. Always call `computer_screen_size` first to understand the display layout before moving the mouse.
+
+### Computer-use: always screenshot before finding
+`computer_find` works best with a fresh screenshot. The OmniParser sidecar takes a screenshot internally, but the macOS Accessibility API tier does not — it queries the live AX tree. If the AX tree is stale (e.g. the page just finished a slow render), call `computer_screenshot` first to force the app to repaint, then call `computer_find`.
+
+### Computer-use: Accessibility permission on macOS
+The macOS Accessibility API is required for `computer_find` Tier 1 (AX element matching). Without it, `computer_find` returns `[]` gracefully. To enable: open **System Settings → Privacy & Security → Accessibility** and enable your terminal emulator (or ittoolkit.app). This is the same permission required for `computer_cursor_position`.
+
+### Computer-use: kill switch for safety
+All write actions (mouse, click, type, key, scroll) can be aborted at any time by pressing **Escape three times** rapidly. This triggers the kill switch, cancels the pending action, and resets the computer-use state. The frontend shows a red pill indicator when write actions are pending.
 
 ---
 
