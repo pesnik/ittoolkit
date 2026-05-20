@@ -1,0 +1,6 @@
+# Optional: enables OCR-based UI element finding
+# pip install pytesseract Pillow
+# Also requires: brew install tesseract
+#
+# Optional: full OmniParser for ML-based grounding
+# See https://github.com/microsoft/OmniParser
