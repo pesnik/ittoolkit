@@ -241,7 +241,7 @@ async function executeTool(
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
         return {
-            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "shell.exec" (command), "http.request" (method, url), "workflow.run" (slug), "human.gate" (prompt), "agent.task" (instructions), "search_conversations" (query), "web_search" (query), "agent_action" (action, paths), "get_workflow_schema" (no arguments). Use one of these exact names.`,
+            content: `Unknown tool "${normalized.name}". Available tools: "execute_command" (cmd, working_dir, timeout_secs), "shell_exec" (command), "http_request" (method, url), "workflow_run" (slug), "human_gate" (prompt), "agent_task" (instructions), "search_conversations" (query), "web_search" (query), "agent_action" (action, paths), "get_workflow_schema" (no arguments). Use one of these exact names.`,
             isError: true,
         };
     }

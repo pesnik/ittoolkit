@@ -617,7 +617,7 @@ const GET_WORKFLOW_SCHEMA_TOOL: Tool = {
 const SHELL_EXEC_TOOL: Tool = {
     type: 'function',
     function: {
-        name: 'shell.exec',
+        name: 'shell_exec',
         description: `Execute a shell command on the local system. Use for system administration, scripts, file operations, and queries. Returns stdout, stderr, and exit code.`,
         parameters: {
             type: 'object',
@@ -635,7 +635,7 @@ const SHELL_EXEC_TOOL: Tool = {
 const HTTP_REQUEST_TOOL: Tool = {
     type: 'function',
     function: {
-        name: 'http.request',
+        name: 'http_request',
         description: `Make an HTTP request to a REST API, webhook, or web service. Use for Jira API, Slack webhooks, M365 Graph API, etc. Returns status code and response body.`,
         parameters: {
             type: 'object',
@@ -655,7 +655,7 @@ const HTTP_REQUEST_TOOL: Tool = {
 const WORKFLOW_RUN_TOOL: Tool = {
     type: 'function',
     function: {
-        name: 'workflow.run',
+        name: 'workflow_run',
         description: `Run another saved workflow or activity by slug. Use for composing multi-step activities from reusable workflows. Launches the child workflow and returns confirmation.`,
         parameters: {
             type: 'object',
@@ -672,7 +672,7 @@ const WORKFLOW_RUN_TOOL: Tool = {
 const HUMAN_GATE_TOOL: Tool = {
     type: 'function',
     function: {
-        name: 'human.gate',
+        name: 'human_gate',
         description: `Pause execution for human interaction. Use when the automation needs the user to review, confirm, or perform a physical-world action. The app shows a dialog; execution resumes when the user confirms.`,
         parameters: {
             type: 'object',
@@ -689,7 +689,7 @@ const HUMAN_GATE_TOOL: Tool = {
 const AGENT_TASK_TOOL: Tool = {
     type: 'function',
     function: {
-        name: 'agent.task',
+        name: 'agent_task',
         description: `Delegate an open-ended task to the AI agent. Use when the next step depends on reading, reasoning, or deciding based on previous results — e.g. "Parse the command output and extract device names". The agent returns its findings as a tool response.`,
         parameters: {
             type: 'object',
