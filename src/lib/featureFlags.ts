@@ -34,6 +34,11 @@ interface FeatureFlagsShape {
     /** Browser-use harness (M1): expose browser_open/navigate/observe/close
      *  tools to vision-capable models, driving a Playwright sidecar. */
     browserAgent: boolean;
+    /** Computer-use harness (CU-M2+): expose screenshot, mouse, keyboard
+     *  tools for direct desktop interaction. */
+    computerUseAgent: boolean;
+    /** MCP client: connect to external MCP servers for extra tools. */
+    mcpServer: boolean;
 }
 
 const DEFAULTS: FeatureFlagsShape = {
@@ -44,6 +49,8 @@ const DEFAULTS: FeatureFlagsShape = {
     memoryCrossConversationSearch: true,
     memoryForgetting: true,
     browserAgent: false,
+    computerUseAgent: false,
+    mcpServer: false,
 };
 
 const STORAGE_KEY = 'ittoolkit.featureFlags';

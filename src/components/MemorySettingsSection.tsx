@@ -266,6 +266,78 @@ export const MemorySettingsSection: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div>
                     <Text weight="semibold" size={400}>
+                        Computer-use harness
+                    </Text>
+                    <Text
+                        size={200}
+                        block
+                        style={{ color: tokens.colorNeutralForeground3, marginTop: '4px' }}
+                    >
+                        Let the agent see the screen, find elements by description, and control the
+                        mouse/keyboard — for desktop IT support tasks that don't involve a browser.
+                        Read-only actions (screenshot, find) run autonomously; write actions
+                        (click, type, key, scroll) require your approval.
+                    </Text>
+                </div>
+                <Divider style={{ margin: '8px 0' }} />
+                {[
+                    {
+                        key: 'computerUseAgent' as FeatureFlag,
+                        label: 'Desktop screen + input control',
+                        description: 'Expose screenshot, find, mouse/keyboard tools to the agent. Requires a vision-capable model.',
+                    },
+                ].map((flag) => (
+                    <React.Fragment key={flag.key}>
+                        <FlagRow
+                            descriptor={flag}
+                            onToggle={handleToggle}
+                            onReset={handleReset}
+                            value={featureFlags[flag.key]}
+                            overridden={isFeatureFlagOverridden(flag.key)}
+                        />
+                        <Divider />
+                    </React.Fragment>
+                ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div>
+                    <Text weight="semibold" size={400}>
+                        MCP Servers
+                    </Text>
+                    <Text
+                        size={200}
+                        block
+                        style={{ color: tokens.colorNeutralForeground3, marginTop: '4px' }}
+                    >
+                        Connect to external MCP servers for extra tools. Each server is spawned on
+                        demand and its tools are surfaced as namespaced functions.
+                    </Text>
+                </div>
+                <Divider style={{ margin: '8px 0' }} />
+                {[
+                    {
+                        key: 'mcpServer' as FeatureFlag,
+                        label: 'MCP client',
+                        description: 'Enable the MCP client to connect to external servers.',
+                    },
+                ].map((flag) => (
+                    <React.Fragment key={flag.key}>
+                        <FlagRow
+                            descriptor={flag}
+                            onToggle={handleToggle}
+                            onReset={handleReset}
+                            value={featureFlags[flag.key]}
+                            overridden={isFeatureFlagOverridden(flag.key)}
+                        />
+                        <Divider />
+                    </React.Fragment>
+                ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div>
+                    <Text weight="semibold" size={400}>
                         Memory
                     </Text>
                     <Text

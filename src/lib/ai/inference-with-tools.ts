@@ -5,6 +5,8 @@ import { detectToolCall, extractToolCalls, formatToolResult, removeToolCallTags 
 import { runtimeSettings } from '@/lib/runtimeSettings';
 import { classifyShellCommand } from './shell-classify';
 import { classifyBrowserAction, describeBrowserAction, type BrowserRisk } from './browser-classify';
+import { classifyComputerAction, describeComputerAction } from './computer-classify';
+import { gatherMcpTools as gatherMcpToolsFn, callMcpTool } from '@/lib/mcp/client';
 import type { HttpRequestResponse } from '@/types/workflow-types';
 
 export interface ToolExecutionEvent {
@@ -32,8 +34,8 @@ export type ConfirmKind = 'write' | 'read' | 'destructive';
 export interface ConfirmMeta {
     intent?: string;
     screenshotBase64?: string;
-    /** Tool family — "shell" or "browser". UIs can render different layouts. */
-    surface?: 'shell' | 'browser';
+    /** Tool family — "shell", "browser", or "computer". UIs can render different layouts. */
+    surface?: 'shell' | 'browser' | 'computer';
 }
 
 export interface InferenceWithToolsOptions {
@@ -220,6 +222,21 @@ async function executeTool(
     }
     if (normalized.name === 'agent.task' || normalized.name === 'agent_task') {
         return executeAgentTask(normalized.arguments);
+    }
+    if (normalized.name.startsWith('computer_')) {
+        return executeComputerTool(normalized.name, normalized.arguments);
+    }
+    if (normalized.name === 'computer_find') {
+        return executeComputerFind(normalized.arguments);
+    }
+    // MCP namespaced tools: <server-id>__<tool>
+    const mcpSep = normalized.name.indexOf('__');
+    if (mcpSep > 0 && mcpSep < normalized.name.length - 2) {
+        return executeMcpTool(
+            normalized.name.slice(0, mcpSep),
+            normalized.name.slice(mcpSep + 2),
+            normalized.arguments,
+        );
     }
     if (normalized.name !== 'execute_command') {
         console.warn('[inference-with-tools] Unknown tool name:', normalized.name, 'args:', normalized.arguments);
@@ -920,6 +937,92 @@ async function executeAgentTask(args: Record<string, unknown>): Promise<{
     };
 }
 
+const COMPUTER_METHOD_MAP: Record<string, string> = {
+    computer_screenshot: 'computer_screenshot',
+    computer_screen_size: 'computer_screen_size',
+    computer_cursor_position: 'computer_cursor_position',
+    computer_mouse_move: 'computer_mouse_move',
+    computer_left_click: 'computer_left_click',
+    computer_right_click: 'computer_right_click',
+    computer_middle_click: 'computer_middle_click',
+    computer_double_click: 'computer_double_click',
+    computer_left_click_drag: 'computer_left_click_drag',
+    computer_type: 'computer_type',
+    computer_key: 'computer_key',
+    computer_scroll: 'computer_scroll',
+    computer_find: 'computer_find',
+};
+
+async function executeComputerTool(
+    toolName: string,
+    args: Record<string, unknown>,
+): Promise<{
+    content: string;
+    isError: boolean;
+    preview?: Record<string, unknown>;
+}> {
+    const method = COMPUTER_METHOD_MAP[toolName];
+    if (!method) {
+        return { content: `Unknown computer tool "${toolName}".`, isError: true };
+    }
+    try {
+        const result = await invoke(method, args);
+        const preview: Record<string, unknown> = { kind: method };
+        if (method === 'computer_screenshot' && result && typeof result === 'object') {
+            const r = result as Record<string, unknown>;
+            preview.screenshot = r.screenshot as string;
+            preview.width = r.width;
+            preview.height = r.height;
+            preview.displayIndex = r.displayIndex;
+            window.dispatchEvent(new CustomEvent('computer-view-update', {
+                detail: { screenshot: r.screenshot, width: r.width, height: r.height, displayIndex: r.displayIndex, receivedAt: Date.now() },
+            }));
+        }
+        if (method === 'computer_screen_size' && result && typeof result === 'object') {
+            preview.displays = (result as Record<string, unknown>).displays;
+        }
+        if (method === 'computer_cursor_position' && result && typeof result === 'object') {
+            preview.cursor = result;
+        }
+        return {
+            content: JSON.stringify(result),
+            isError: false,
+            preview,
+        };
+    } catch (e) {
+        return { content: `Error: ${e}`, isError: true };
+    }
+}
+
+async function executeComputerFind(args: Record<string, unknown>): Promise<{
+    content: string;
+    isError: boolean;
+    preview?: Record<string, unknown>;
+}> {
+    try {
+        const result = await invoke('computer_find', args);
+        return { content: JSON.stringify(result), isError: false };
+    } catch (e) {
+        return { content: `Error: ${e}`, isError: true };
+    }
+}
+
+async function executeMcpTool(
+    serverId: string,
+    tool: string,
+    args: Record<string, unknown>,
+): Promise<{
+    content: string;
+    isError: boolean;
+}> {
+    try {
+        const result = await callMcpTool(serverId, tool, args);
+        return { content: JSON.stringify(result), isError: false };
+    } catch (e) {
+        return { content: `Error: ${e}`, isError: true };
+    }
+}
+
 export async function runInferenceWithTools(
     request: InferenceRequest,
     options: InferenceWithToolsOptions = {}
@@ -1088,6 +1191,16 @@ export async function runInferenceWithTools(
                             screenshotBase64: cached?.screenshot,
                         };
                     }
+                } else if (toolCall.name.startsWith('computer_')) {
+                    const risk = classifyComputerAction(toolCall.name);
+                    if (risk === 'write') {
+                        confirmKind = 'write';
+                        window.dispatchEvent(new CustomEvent('computer-action-pending', {
+                            detail: { intent: describeComputerAction(toolCall.name, toolCall.arguments) },
+                        }));
+                        const intent = describeComputerAction(toolCall.name, toolCall.arguments);
+                        confirmMeta = { surface: 'computer', intent };
+                    }
                 }
                 const needsConfirm = !!(onConfirmExecution && confirmKind);
 
@@ -1134,6 +1247,9 @@ export async function runInferenceWithTools(
                                 content: formatToolResult(toolCall.name, 'Cancelled by user', false),
                                 timestamp: Date.now(),
                             });
+                        if (toolCall.name.startsWith('computer_')) {
+                            window.dispatchEvent(new CustomEvent('computer-action-settled'));
+                        }
                         continue;
                     }
                 }
@@ -1204,6 +1320,10 @@ export async function runInferenceWithTools(
                     };
 
                 toolResults.push(toolResultMessage);
+
+                if (toolCall.name.startsWith('computer_')) {
+                    window.dispatchEvent(new CustomEvent('computer-action-settled'));
+                }
             } catch (error) {
                 const toolExecution: ToolExecutionData = {
                     toolName: toolCall.name,

@@ -124,6 +124,17 @@ export type ToolResultAction =
   | { type: 'workflow_card'; payload: {
         actionId: string;
         workflow: import('./workflow-types').WorkflowFileV2;
+    } }
+  | { type: 'computer_preview'; payload: {
+        kind: string;
+        screenshot?: string;
+        width?: number;
+        height?: number;
+        displayIndex?: number;
+        x?: number;
+        y?: number;
+        displays?: Array<{ index: number; x: number; y: number; width: number; height: number; scaleFactor: number; isPrimary: boolean; name: string }>;
+        cursor?: { x: number; y: number };
     } };
 
 /**

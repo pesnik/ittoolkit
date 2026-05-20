@@ -45,6 +45,11 @@ serde_yaml = "0.9"
 slug = "0.1"
 rusqlite = { version = "0.39", features = ["bundled", "serde_json"] }
 cron = "0.15"
+xcap = "0.8"
+image = "0.25"
+base64 = "0.22"
+enigo = "0.3"
+tauri-plugin-global-shortcut = "2"
 
 
 # Partition Management

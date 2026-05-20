@@ -5,6 +5,8 @@ import { FileSystemContext, FileMetadata } from '@/types/ai-types';
 import { FileExplorer } from '@/components/FileExplorer';
 import { AIPanel } from '@/components/AIPanel';
 import { BrowserView } from '@/components/BrowserView';
+import { ComputerView } from '@/components/ComputerView';
+import { ComputerKillSwitch } from '@/components/ComputerKillSwitch';
 import { WorkflowsPanel } from '@/components/WorkflowsPanel';
 import ToolshedPanel from '@/components/ToolshedPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -12,7 +14,7 @@ import { featureFlags } from '@/lib/featureFlags';
 import { makeStyles, shorthands, tokens, Tab, TabList, Button, Tooltip, type SelectTabEvent, type SelectTabData } from '@fluentui/react-components';
 import { SparkleRegular } from '@fluentui/react-icons';
 
-type Workspace = 'files' | 'toolshed' | 'browser' | 'workflows';
+type Workspace = 'files' | 'toolshed' | 'browser' | 'computer' | 'workflows';
 
 const useStyles = makeStyles({
   container: {
@@ -104,6 +106,14 @@ export default function Home() {
       window.removeEventListener('browser-session-opened', switchToBrowser);
       window.removeEventListener('browser-view-update', switchToBrowser);
     };
+  }, []);
+
+  // Auto-switch to Computer tab when the agent takes a screenshot.
+  useEffect(() => {
+    if (!featureFlags.computerUseAgent) return;
+    const handler = () => setWorkspace('computer');
+    window.addEventListener('computer-view-update', handler);
+    return () => window.removeEventListener('computer-view-update', handler);
   }, []);
 
   // Show browser split + open AI panel when workflow recording starts.
@@ -219,6 +229,7 @@ export default function Home() {
             <Tab value="files">Files</Tab>
             <Tab value="toolshed">Toolshed</Tab>
             {featureFlags.browserAgent && <Tab value="browser">Browser</Tab>}
+            {featureFlags.computerUseAgent && <Tab value="computer">Computer</Tab>}
             {featureFlags.browserAgent && <Tab value="workflows">Workflows</Tab>}
           </TabList>
           <div className={styles.globalActions}>
@@ -243,6 +254,7 @@ export default function Home() {
             />
           )}
           {workspace === 'toolshed' && <ToolshedPanel />}
+          {featureFlags.computerUseAgent && workspace === 'computer' && <ComputerView />}
           {/* WorkflowsPanel — narrows to 300 px sidebar when recording or replaying. */}
           {workspace === 'workflows' && (
             <div style={{
@@ -299,6 +311,7 @@ export default function Home() {
           prefillInput={aiPanelPrefill}
         />
       </div>
+      {featureFlags.computerUseAgent && <ComputerKillSwitch />}
     </main>
   );
 }

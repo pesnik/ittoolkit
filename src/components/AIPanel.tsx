@@ -243,7 +243,7 @@ export const AIPanel = ({
     const [pendingConfirmation, setPendingConfirmation] = useState<{
         cmd: string;
         kind: 'write' | 'read' | 'destructive';
-        surface?: 'shell' | 'browser';
+        surface?: 'shell' | 'browser' | 'computer';
         intent?: string;
         screenshotBase64?: string;
         resolve: (value: boolean) => void;
@@ -1465,18 +1465,22 @@ export const AIPanel = ({
                                 ? (pendingConfirmation.kind === 'destructive'
                                     ? 'Confirm browser action (destructive)'
                                     : 'Confirm browser action')
-                                : pendingConfirmation.kind === 'read'
-                                    ? 'Confirm file read'
-                                    : 'Confirm destructive command'}
+                                : pendingConfirmation.surface === 'computer'
+                                    ? 'Confirm computer action'
+                                    : pendingConfirmation.kind === 'read'
+                                        ? 'Confirm file read'
+                                        : 'Confirm destructive command'}
                         </div>
                         <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
                             {pendingConfirmation.surface === 'browser'
                                 ? 'The agent wants to perform an action that mutates web state. Review the screenshot and intent before approving:'
-                                : pendingConfirmation.kind === 'read'
-                                    ? 'The agent wants to read file contents into its context. Approve only if this file is safe to share with the model:'
-                                    : 'The agent wants to execute a potentially destructive command:'}
+                                : pendingConfirmation.surface === 'computer'
+                                    ? 'The agent wants to control the mouse/keyboard. Review the action before approving:'
+                                    : pendingConfirmation.kind === 'read'
+                                        ? 'The agent wants to read file contents into its context. Approve only if this file is safe to share with the model:'
+                                        : 'The agent wants to execute a potentially destructive command:'}
                         </Text>
-                        {pendingConfirmation.surface === 'browser' ? (
+                        {pendingConfirmation.surface === 'browser' || pendingConfirmation.surface === 'computer' ? (
                             <>
                                 {pendingConfirmation.intent && (
                                     <div className={styles.confirmCommand}>{pendingConfirmation.intent}</div>

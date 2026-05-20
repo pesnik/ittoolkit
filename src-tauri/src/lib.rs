@@ -19,6 +19,11 @@ mod browser_commands;
 mod workflow_recorder;
 mod workflow_db;
 mod web_search;
+mod computer_commands;
+mod computer_classify;
+mod perception_commands;
+mod mcp_types;
+mod mcp_client;
 
 use std::str::FromStr;
 use tauri::Manager;
@@ -140,6 +145,9 @@ pub fn run() {
     .manage(browser_commands::BrowserSupervisor::default())
     .manage(workflow_recorder::WorkflowRecorder::default())
     .manage(browser_capability::BrowserCapabilityState::default())
+    .manage(computer_commands::ComputerState::default())
+    .manage(perception_commands::PerceptionSupervisor::default())
+    .manage(mcp_client::McpClientState::default())
     .invoke_handler(tauri::generate_handler![
         commands::scan_dir,
         commands::refresh_scan,
@@ -251,7 +259,31 @@ pub fn run() {
         // Browser capability gate (M5: per-skill URL allowlist)
         browser_capability::browser_set_capabilities,
         browser_capability::browser_clear_capabilities,
-        browser_capability::browser_get_capabilities
+        browser_capability::browser_get_capabilities,
+        // Computer-use harness (CU-M2 read-only, CU-M3 write)
+        computer_commands::computer_screenshot,
+        computer_commands::computer_screen_size,
+        computer_commands::computer_cursor_position,
+        computer_commands::computer_mouse_move,
+        computer_commands::computer_left_click,
+        computer_commands::computer_right_click,
+        computer_commands::computer_middle_click,
+        computer_commands::computer_double_click,
+        computer_commands::computer_left_click_drag,
+        computer_commands::computer_type,
+        computer_commands::computer_key,
+        computer_commands::computer_scroll,
+        computer_commands::computer_kill,
+        // Perception sidecar (CU-M4 OmniParser)
+        perception_commands::perception_rpc,
+        perception_commands::perception_shutdown,
+        // MCP client (CU-M5)
+        mcp_client::mcp_clients_list,
+        mcp_client::mcp_clients_upsert,
+        mcp_client::mcp_clients_remove,
+        mcp_client::mcp_client_tools,
+        mcp_client::mcp_client_call,
+        mcp_client::mcp_client_shutdown,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

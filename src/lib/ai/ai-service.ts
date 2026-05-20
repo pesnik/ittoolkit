@@ -397,8 +397,153 @@ function activeModelSupportsVision(modelConfig: ModelConfig): boolean {
     return false;
 }
 
+const COMPUTER_SCREENSHOT_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_screenshot',
+        description: `Capture a screenshot of the user's primary display. Returns a base64 JPEG + dimensions. Read-only — no mouse or keyboard interaction. Use this to see what's on the user's screen before planning any desktop interaction.`,
+        parameters: { type: 'object', properties: { display_index: { type: 'number', description: 'Optional display index (defaults to primary).' } } },
+    },
+};
+
+const COMPUTER_SCREEN_SIZE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_screen_size',
+        description: `Return the layout of all connected displays: index, x, y, width, height, scale factor, primary flag, and name. Read-only.`,
+        parameters: { type: 'object', properties: {} },
+    },
+};
+
+const COMPUTER_CURSOR_POSITION_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_cursor_position',
+        description: `Return the current cursor (x, y) in desktop coordinates. Read-only. Requires Accessibility permission on macOS.`,
+        parameters: { type: 'object', properties: {} },
+    },
+};
+
+const COMPUTER_FIND_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_find',
+        description: `Find a UI element on screen by natural-language description (e.g. "the Submit button", "the search bar at the top right"). Returns (x, y) pixel coordinates without clicking. Read-only — uses local vision models (UI-TARS + OmniParser) entirely on-device.`,
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Natural-language description of the element to find.' },
+                display_index: { type: 'number', description: 'Optional display index to search (defaults to primary).' },
+            },
+            required: ['query'],
+        },
+    },
+};
+
+const COMPUTER_MOUSE_MOVE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_mouse_move',
+        description: `Move the mouse cursor to absolute screen coordinates (x, y). Write action — requires user approval.`,
+        parameters: {
+            type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'],
+        },
+    },
+};
+
+const COMPUTER_LEFT_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_left_click',
+        description: `Left-click at the current cursor position, or at (x, y) if provided. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+    },
+};
+
+const COMPUTER_RIGHT_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_right_click',
+        description: `Right-click at the current cursor position, or at (x, y) if provided. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+    },
+};
+
+const COMPUTER_MIDDLE_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_middle_click',
+        description: `Middle-click at the current cursor position, or at (x, y) if provided. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+    },
+};
+
+const COMPUTER_DOUBLE_CLICK_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_double_click',
+        description: `Double-left-click at the current cursor position, or at (x, y) if provided. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+    },
+};
+
+const COMPUTER_LEFT_CLICK_DRAG_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_left_click_drag',
+        description: `Press and hold left button at (x1, y1), drag to (x2, y2), release. Write action — requires user approval.`,
+        parameters: {
+            type: 'object', properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' } },
+            required: ['x1', 'y1', 'x2', 'y2'],
+        },
+    },
+};
+
+const COMPUTER_TYPE_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_type',
+        description: `Type a string of text into the currently focused UI element. The text preview shown to the user is truncated to 6 characters. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { text: { type: 'string', description: 'Text to type.' } }, required: ['text'] },
+    },
+};
+
+const COMPUTER_KEY_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_key',
+        description: `Press a single key or keyboard chord. Supports: Enter, Tab, Escape, Space, Backspace, Delete, arrows, Home, End, PageUp, PageDown, and single letters. Chords with modifiers: ctrl+c, cmd+space, alt+tab, shift+arrow, etc. Write action — requires user approval.`,
+        parameters: { type: 'object', properties: { key: { type: 'string', description: 'Key name or chord (e.g. "Enter", "cmd+t", "ctrl+shift+s").' } }, required: ['key'] },
+    },
+};
+
+const COMPUTER_SCROLL_TOOL: Tool = {
+    type: 'function',
+    function: {
+        name: 'computer_scroll',
+        description: `Scroll in a direction. Write action — requires user approval.`,
+        parameters: {
+            type: 'object', properties: {
+                direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction.' },
+                clicks: { type: 'number', description: 'Scroll clicks (default 3).' },
+            }, required: ['direction'],
+        },
+    },
+};
+
+const COMPUTER_TOOLS: Tool[] = [
+    COMPUTER_SCREENSHOT_TOOL, COMPUTER_SCREEN_SIZE_TOOL, COMPUTER_CURSOR_POSITION_TOOL, COMPUTER_FIND_TOOL,
+    COMPUTER_MOUSE_MOVE_TOOL, COMPUTER_LEFT_CLICK_TOOL, COMPUTER_RIGHT_CLICK_TOOL, COMPUTER_MIDDLE_CLICK_TOOL,
+    COMPUTER_DOUBLE_CLICK_TOOL, COMPUTER_LEFT_CLICK_DRAG_TOOL, COMPUTER_TYPE_TOOL, COMPUTER_KEY_TOOL, COMPUTER_SCROLL_TOOL,
+];
+
 export function canUseBrowserTools(modelConfig: ModelConfig): boolean {
     if (!featureFlags.browserAgent) return false;
+    return activeModelSupportsVision(modelConfig);
+}
+
+export function canUseComputerTools(modelConfig: ModelConfig): boolean {
+    if (!featureFlags.computerUseAgent) return false;
     return activeModelSupportsVision(modelConfig);
 }
 
@@ -834,10 +979,39 @@ export async function runInference(
             tools.push(...BROWSER_TOOLS);
             tools.push(WEB_SEARCH_TOOL);
         }
+        if (canUseComputerTools(request.modelConfig)) {
+            tools.push(...COMPUTER_TOOLS);
+        }
         requestWithSystem = {
             ...requestWithSystem,
             tools,
         };
+    }
+
+    // Gather MCP tools if the feature is enabled (async, best-effort).
+    // This runs after the main tools array is built and adds namespaced tools
+    // from configured servers.
+    if (featureFlags.mcpServer && request.modelConfig.provider === ModelProvider.OpenAICompatible) {
+        try {
+            const { gatherMcpTools } = await import('@/lib/mcp/client');
+            const mcpEntries = await gatherMcpTools();
+            if (mcpEntries.length > 0) {
+                const mcpTools: Tool[] = mcpEntries.map(({ serverId, tool }) => ({
+                    type: 'function' as const,
+                    function: {
+                        name: `${serverId}__${tool.name}`,
+                        description: tool.description,
+                        parameters: tool.inputSchema as Record<string, unknown>,
+                    },
+                }));
+                requestWithSystem = {
+                    ...requestWithSystem,
+                    tools: [...(requestWithSystem.tools ?? []), ...mcpTools],
+                };
+            }
+        } catch {
+            // skip MCP tools on error
+        }
     }
 
     // Route to appropriate provider
@@ -1108,7 +1282,53 @@ Do NOT try to type passwords or click submit on login forms. Do NOT loop calling
 
 ### Workflow creation offer
 After successfully completing a multi-step browser task (you navigated, filled fields, submitted, and got a result), call agent_action with action="suggest_skill", skill="workflow-creator", title="Save as Workflow", description="Turn what we just did into a reusable automation you can run with one click."
-Do NOT offer this in plain text — emit the card. Only once per completed task, not after every individual step.` : ''}`;
+Do NOT offer this in plain text — emit the card. Only once per completed task, not after every individual step.` : ''}
+
+${canUseComputerTools(request.modelConfig) ? `## Computer-use tools
+
+You can see the user's screen and control the mouse and keyboard. Use these tools for desktop IT support tasks: checking system settings, navigating native apps, installing/updating software, reading error dialogs, and any physical-machine troubleshooting.
+
+### Read-only tools (autonomous, no approval)
+
+**computer_screenshot**
+Capture a screenshot of the user's primary display. Returns a base64 JPEG + dimensions. Always take a screenshot FIRST to understand what's on screen before planning any action.
+Arguments: display_index (number, optional — omit for primary display).
+
+**computer_screen_size**
+Return the layout of all connected displays: index, pos, dims, scale factor, primary flag, name.
+
+**computer_cursor_position**
+Return the current cursor (x, y) in desktop coordinates. Requires Accessibility permission on macOS.
+
+**computer_find**
+Find a UI element by natural-language description (e.g. "the Submit button", "the search bar"). Returns (x, y) pixel coordinates without clicking. Uses local vision models entirely on-device.
+Arguments: query (string, required — what to find), display_index (number, optional).
+
+### Write tools (require user approval)
+
+Every write action triggers a confirmation card showing the action description + current screenshot. The user must explicitly approve before execution.
+
+**computer_mouse_move** — Move cursor to (x, y). Required: x, y.
+**computer_left_click** — Left-click at (x, y) or current position.
+**computer_right_click** — Right-click at (x, y) or current position.
+**computer_middle_click** — Middle-click at (x, y) or current position.
+**computer_double_click** — Double-click at (x, y) or current position.
+**computer_left_click_drag** — Drag from (x1,y1) to (x2,y2). Required: x1, y1, x2, y2.
+**computer_type** — Type text into the focused element. Arguments: text (string, required).
+**computer_key** — Press a key or chord: Enter, Tab, Escape, Space, Backspace, Delete, arrows, Home, End, PageUp, PageDown, single letters, and modifier chords (ctrl+c, cmd+space, alt+tab, shift+arrow). Required: key.
+**computer_scroll** — Scroll in a direction. Arguments: direction (up/down/left/right, required), clicks (number, default 3).
+
+### Desktop interaction pattern
+
+1. **computer_screenshot** — see what's on the screen
+2. **computer_find** {"query": "the Save button"} — locate the element
+3. **computer_left_click** {"x": 842, "y": 318} — click it (approval required)
+4. **computer_type** {"text": "user input"} — fill a field (approval required)
+5. **computer_screenshot** — verify the result
+
+If the user seems stuck or confused, take a screenshot and ask what they want to do next. Do NOT navigate the desktop blindly — always observe first.
+
+After completing a multi-step desktop task that would be useful as a repeatable automation, ask if they want to save it as a workflow.` : ''}`;
 
     let systemPrompt = buildPrompt(template.systemPrompt, {
         fs_context: fsContextStr,

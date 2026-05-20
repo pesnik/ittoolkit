@@ -638,6 +638,64 @@ export function ToolCallDisplay({ execution, onActionResponse }: ToolCallDisplay
                         );
                     })}
 
+                    {/* Computer tool inline preview (screenshot + cursor). */}
+                    {execution.actions?.map((action, idx) => {
+                        if (action.type !== 'computer_preview') return null;
+                        const p = action.payload;
+                        return (
+                            <div
+                                key={`computer-${idx}`}
+                                className={styles.section}
+                                style={{
+                                    border: `1px solid ${tokens.colorNeutralStroke2}`,
+                                    borderRadius: 8,
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        padding: '8px 12px',
+                                        background: tokens.colorNeutralBackground3,
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 2,
+                                    }}
+                                >
+                                    <Text size={200} weight="semibold">
+                                        {p.kind === 'computer_screenshot' ? 'Screen capture' :
+                                         p.kind === 'computer_screen_size' ? 'Display layout' :
+                                         p.kind === 'computer_cursor_position' ? 'Cursor position' :
+                                         p.kind}
+                                    </Text>
+                                    {p.width && p.height && (
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                            {p.width} × {p.height}
+                                            {typeof p.displayIndex === 'number' ? ` · display ${p.displayIndex}` : ''}
+                                        </Text>
+                                    )}
+                                    {p.cursor && (
+                                        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                                            Cursor: ({p.cursor.x}, {p.cursor.y})
+                                        </Text>
+                                    )}
+                                </div>
+                                {p.screenshot && (
+                                    <img
+                                        src={`data:image/jpeg;base64,${p.screenshot}`}
+                                        alt="screen capture"
+                                        style={{
+                                            display: 'block',
+                                            width: '100%',
+                                            maxHeight: 400,
+                                            objectFit: 'contain',
+                                            background: tokens.colorNeutralBackground1,
+                                        }}
+                                    />
+                                )}
+                            </div>
+                        );
+                    })}
+
                     {/* Workflow Card */}
                     {execution.actions?.map((action, idx) => {
                         if (action.type !== 'workflow_card') return null;
