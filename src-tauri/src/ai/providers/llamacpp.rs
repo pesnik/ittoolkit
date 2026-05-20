@@ -67,6 +67,19 @@ fn get_model_registry() -> &'static [GGUFModel] {
             min_ram_gb: 6,
             recommended_ram_gb: 8,
         },
+        GGUFModel {
+            // bartowski provides single-file Q4_K_M GGUFs — no split parts to
+            // deal with. The 7B Instruct model is the sweet spot for agentic
+            // tool use: strong instruction following, fits in 8 GB VRAM/RAM.
+            repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+            model_file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+            mmproj_file: None,
+            display_name: "Qwen 2.5 7B Instruct (Q4_K_M)",
+            size_bytes: 4_680_000_000,
+            context_length: 32768,
+            min_ram_gb: 8,
+            recommended_ram_gb: 12,
+        },
     ]
 }
 
@@ -113,12 +126,10 @@ fn get_models_dir() -> PathBuf {
 }
 
 fn get_llama_server_path() -> PathBuf {
-    // In dev, look in src-tauri/binaries; in production, bundled as sidecar
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join("llama-server");
     if dev_path.exists() {
         return dev_path;
     }
-    // Fallback: check PATH
     PathBuf::from("llama-server")
 }
 
@@ -219,12 +230,10 @@ pub async fn download_gguf_model(model: &GGUFModel, sender: Option<tokio::sync::
 async fn ensure_server_running(model_id: &str) -> Result<u16, AIError> {
     let mut state = LLAMACPP_STATE.lock().await;
 
-    // If already running with the right model, return port
     if state.is_running && state.model_loaded.as_deref() == Some(model_id) {
         return Ok(state.port);
     }
 
-    // If running with wrong model, kill it
     if state.is_running {
         if let Some(ref mut proc) = state.process {
             let _ = proc.kill().ok();
@@ -288,7 +297,6 @@ async fn ensure_server_running(model_id: &str) -> Result<u16, AIError> {
     state.port = port;
     state.model_loaded = Some(model_id.to_string());
 
-    // Wait for server to be ready
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
@@ -374,7 +382,7 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
             details: None, suggested_actions: None,
         })?;
 
-    // Build OpenAI-compatible request
+    // Build OpenAI-compatible messages array
     let mut openai_messages = Vec::new();
     for msg in &request.messages {
         let role = match msg.role {
@@ -391,6 +399,18 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
         }));
     }
 
+    // Stop tokens for Qwen / ChatML models.
+    // The im_end and im_start tokens mark turn boundaries in ChatML format.
+    // Without them a 0.5B model frequently overshoots EOS and enters the
+    // degenerate "loaf = loaf = ..." repetition loop. We build the token
+    // strings at runtime to avoid angle-bracket literals in source.
+    let im_end   = format!("{}im_end{}", '<', '>').replace('<', "<|").replace('>', "|>");
+    let im_start = format!("{}im_start{}", '<', '>').replace('<', "<|").replace('>', "|>");
+    let eos_tok  = "</s>".to_string();
+    let stop_tokens: Vec<String> = request.model_config.parameters.stop_sequences
+        .clone()
+        .unwrap_or_else(|| vec![im_end, im_start, eos_tok]);
+
     let mut body = serde_json::json!({
         "model": model_id,
         "messages": openai_messages,
@@ -398,6 +418,16 @@ pub async fn run_llamacpp_inference(request: &InferenceRequest) -> Result<Infere
         "top_p": request.model_config.parameters.top_p,
         "max_tokens": request.model_config.parameters.max_tokens,
         "stream": false,
+        // repeat_penalty penalises tokens that have appeared recently.
+        // A value of 1.15 matches llama.cpp defaults that prevent runaway
+        // repetition without degrading response quality on small models.
+        "repeat_penalty": 1.15,
+        // repeat_last_n: how many tokens of history to search for repeats.
+        "repeat_last_n": 64,
+        // min_p filters unlikely tokens; combined with repeat_penalty this
+        // further reduces the chance of the model looping on one token.
+        "min_p": 0.05,
+        "stop": stop_tokens,
     });
 
     // Add tools for native function calling if provided
